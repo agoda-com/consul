@@ -187,6 +187,9 @@ func (s *HTTPServer) wrap(handler func(resp http.ResponseWriter, req *http.Reque
 			s.agent.logger.Printf("[ERR] http: Request %s %v, error: %v from=%s", req.Method, logURL, err, req.RemoteAddr)
 			code := http.StatusInternalServerError // 500
 			errMsg := err.Error()
+			if strings.Contains(errMsg, "match pattern") {
+				code = http.StatusNotAcceptable // 406
+			}
 			if strings.Contains(errMsg, "Permission denied") || strings.Contains(errMsg, "ACL not found") {
 				code = http.StatusForbidden // 403
 			}

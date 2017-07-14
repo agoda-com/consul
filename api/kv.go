@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,9 @@ type KVPair struct {
 	// Key is the name of the key. It is also part of the URL path when accessed
 	// via the API.
 	Key string
+
+	// RegEx is the pattern which the Key has to match
+	RegEx string
 
 	// CreateIndex holds the index corresponding the creation of this KVPair. This
 	// is a read-only field.
@@ -67,6 +71,7 @@ const (
 type KVTxnOp struct {
 	Verb    KVOp
 	Key     string
+	RegEx   string
 	Value   []byte
 	Flags   uint64
 	Index   uint64
@@ -81,6 +86,11 @@ type KVTxnOps []*KVTxnOp
 type KVTxnResponse struct {
 	Results []*KVPair
 	Errors  TxnErrors
+}
+
+type KVBundle struct {
+	Value []byte
+	RegEx string
 }
 
 // KV is used to manipulate the K/V API
@@ -188,7 +198,16 @@ func (k *KV) Put(p *KVPair, q *WriteOptions) (*WriteMeta, error) {
 	if p.Flags != 0 {
 		params["flags"] = strconv.FormatUint(p.Flags, 10)
 	}
-	_, wm, err := k.put(p.Key, params, p.Value, q)
+
+	// Combine the value with its regEx
+	var b KVBundle
+	b.Value = p.Value
+	b.RegEx = p.RegEx
+
+	var val bytes.Buffer
+	binary.Write(&val, binary.BigEndian, b)
+
+	_, wm, err := k.put(p.Key, params, val.Bytes(), q)
 	return wm, err
 }
 

@@ -614,11 +614,17 @@ type IndexedNodeDump struct {
 	QueryMeta
 }
 
+type ValValid struct {
+	Value string
+	RegEx string
+}
+
 // DirEntry is used to represent a directory entry. This is
 // used for values in our Key-Value store.
 type DirEntry struct {
 	LockIndex uint64
 	Key       string
+	RegEx     string
 	Flags     uint64
 	Value     []byte
 	Session   string `json:",omitempty"`
@@ -632,6 +638,7 @@ func (d *DirEntry) Clone() *DirEntry {
 		LockIndex: d.LockIndex,
 		Key:       d.Key,
 		Flags:     d.Flags,
+		RegEx:     d.RegEx,
 		Value:     d.Value,
 		Session:   d.Session,
 		RaftIndex: RaftIndex{

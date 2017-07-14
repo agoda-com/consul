@@ -249,6 +249,11 @@
                     <span class="help-block">Value can be any format and length</span>
                   </div>
                   {{/if}}
+                  <div class="input-group">
+                    <span class="input-group-addon">RegEx</span>
+                    {{ input value=newKey.regEx class="form-control" required=true placeholder=".*"}}
+                  </div>
+                  <span class="help-block">Check value against RegEx (<a href="https://github.com/google/re2/wiki/Syntax">golang</a> Syntax)</span>
 
                   <button {{ action "createKey"}} {{bind-attr disabled=newKey.isInvalid }} {{ bind-attr class=":btn newKey.isValid:btn-success:btn-default" }}>Create</button>
                   {{#unless newKey.isFolder }}
@@ -313,6 +318,11 @@
                 <div {{ bind-attr class=":form-group model.validateJson:validate model.isValidJson:success:error" }}>
                   {{ textarea value=model.valueDecoded class="form-control" disabled=model.isLocked}}
                 </div>
+                <div class="input-group">
+                  <span class="input-group-addon">RegEx</span>
+                  {{ input value=model.RegEx class="form-control" required=true placeholder=".*"}}
+                </div>
+                <span class="help-block">Check value against RegEx (<a href="https://github.com/google/re2/wiki/Syntax">golang</a> Syntax)</span>
                 <button {{action "updateKey"}} {{bind-attr disabled=isLoading}} {{bind-attr class=":btn isLoading:btn-warning:btn-success"}} {{bind-attr disabled=isLocked}}>Update</button>
                 <button {{action "cancelEdit"}} {{bind-attr disabled=isLoading}} {{bind-attr class=":btn isLoading:btn-warning:btn-default"}}>Cancel</button>
                 <label class="form-checkbox">{{ input type=checkbox checked=model.validateJson }}Validate JSON</label>

@@ -114,6 +114,7 @@ App.KvShowController = KvBaseController.extend(Ember.Validations.Mixin, {
       var controller = this;
       var newKey = controller.get('newKey');
       var parentKey = controller.get('parentKey');
+      var regEx = newKey.get('regEx');
       var grandParentKey = controller.get('grandParentKey');
       var dc = controller.get('dc').get('datacenter');
       var token = App.get('settings.token');
@@ -124,12 +125,14 @@ App.KvShowController = KvBaseController.extend(Ember.Validations.Mixin, {
       if (parentKey !== undefined && parentKey !== "/") {
         newKey.set('Key', (parentKey + newKey.get('Key')));
       }
+      var obj = { "value":newKey.get('Value'), "regex":regEx };
+      var value = JSON.stringify(obj);
 
       // Put the Key and the Value retrieved from the form
       Ember.$.ajax({
           url: (formatUrl(consulHost + "/v1/kv/" + newKey.get('Key'), dc, token)),
           type: 'PUT',
-          data: newKey.get('Value')
+          data: value
       }).then(function(response) {
         // transition to the right place
         if (newKey.get('isFolder') === true) {
@@ -180,15 +183,19 @@ App.KvEditController = KvBaseController.extend({
 
       var dc = this.get('dc').get('datacenter');
       var key = this.get("model");
+      var regEx = key.get('regEx');
       var controller = this;
       var token = App.get('settings.token');
+
+      var obj = { "value":key.get('valueDecoded'), "regex":regEx };
+      var value = JSON.stringify(obj);
 
       // Put the key and the decoded (plain text) value
       // from the form.
       Ember.$.ajax({
           url: (formatUrl(consulHost + "/v1/kv/" + key.get('Key'), dc, token)),
           type: 'PUT',
-          data: key.get('valueDecoded')
+          data: value
       }).then(function(response) {
         // If success, just reset the loading state.
         controller.set('isLoading', false);
@@ -504,4 +511,3 @@ App.SettingsController = Ember.ObjectController.extend({
     }
   }
 });
-

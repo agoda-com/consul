@@ -148,6 +148,11 @@ App.Key = Ember.Object.extend(Ember.Validations.Mixin, {
     return (this.get('Key').slice(-1) === '/');
   }.property('Key'),
 
+  getRegEx: function() {
+      return this.get('RegEx');
+  }.property('RegEx'),
+
+
   // Boolean if the key is locked or now
   isLocked: function() {
     if (!this.get('Session')) {
@@ -192,6 +197,23 @@ App.Key = Ember.Object.extend(Ember.Validations.Mixin, {
     // base64 decode the value
     return (this.get('Value').fromBase64());
   }.property('Value'),
+
+  regEx: function(key, regEx) {
+
+    // setter
+    if (arguments.length > 1) {
+      this.set('RegEx', regEx);
+      return regEx;
+    }
+
+    // getter
+    if (this.get('RegEx') === null) {
+      return "";
+    }
+
+    // base64 decode the value
+    return (this.get('RegEx'));
+  }.property('RegEx'),
 
   // Check if JSON is valid by attempting a native JSON parse
   isValidJson: function() {

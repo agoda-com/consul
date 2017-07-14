@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -194,8 +195,17 @@ func (s *HTTPServer) KVSPut(resp http.ResponseWriter, req *http.Request, args *s
 	if _, err := io.Copy(buf, req.Body); err != nil {
 		return nil, err
 	}
-	applyReq.DirEnt.Value = buf.Bytes()
 
+	var dat structs.ValValid
+	if err := json.Unmarshal(buf.Bytes(), &dat); err != nil {
+		// This seems to be an old key without not in JSON with the
+		// corresponding RegEx. Lets parse it as key.
+		dat.Value = buf.String()
+		dat.RegEx = ""
+	}
+
+	applyReq.DirEnt.Value = []byte(dat.Value)
+	applyReq.DirEnt.RegEx = dat.RegEx
 	// Make the RPC
 	var out bool
 	if err := s.agent.RPC("KVS.Apply", &applyReq, &out); err != nil {

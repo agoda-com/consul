@@ -1,7 +1,9 @@
 package consul
 
 import (
+	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/armon/go-metrics"
@@ -24,6 +26,17 @@ func kvsPreApply(srv *Server, acl acl.ACL, op api.KVOp, dirEnt *structs.DirEntry
 	// Verify the entry.
 	if dirEnt.Key == "" && op != api.KVDeleteTree {
 		return false, fmt.Errorf("Must provide key")
+	}
+
+	if dirEnt.RegEx != "" {
+		matched, err := regexp.Match(dirEnt.RegEx, dirEnt.Value)
+		if err != nil {
+			return false, fmt.Errorf("Failed to validate value: %v", err)
+		}
+		if !matched {
+			var validationFail = errors.New("Key does not match pattern")
+			return false, validationFail
+		}
 	}
 
 	// Apply the ACL policy if any.
