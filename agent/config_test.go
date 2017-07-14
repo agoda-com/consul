@@ -242,8 +242,8 @@ func TestDecodeConfig(t *testing.T) {
 			c:  &Config{DisableCoordinates: true},
 		},
 		{
-			in: `{"disable_host_node_id":true}`,
-			c:  &Config{DisableHostNodeID: true},
+			in: `{"disable_host_node_id":false}`,
+			c:  &Config{DisableHostNodeID: Bool(false)},
 		},
 		{
 			in: `{"dns_config":{"allow_stale":true}}`,
@@ -329,6 +329,10 @@ func TestDecodeConfig(t *testing.T) {
 		{
 			in: `{"encrypt_verify_outgoing":true}`,
 			c:  &Config{EncryptVerifyOutgoing: Bool(true)},
+		},
+		{
+			in: `{"http_config":{"block_endpoints":["a","b","c","d"]}}`,
+			c:  &Config{HTTPConfig: HTTPConfig{BlockEndpoints: []string{"a", "b", "c", "d"}}},
 		},
 		{
 			in: `{"http_api_response_headers":{"a":"b","c":"d"}}`,
@@ -1305,7 +1309,7 @@ func TestMergeConfig(t *testing.T) {
 		Domain:            "other",
 		LogLevel:          "info",
 		NodeID:            "bar",
-		DisableHostNodeID: true,
+		DisableHostNodeID: Bool(false),
 		NodeName:          "baz",
 		ClientAddr:        "127.0.0.2",
 		BindAddr:          "127.0.0.2",
@@ -1394,6 +1398,10 @@ func TestMergeConfig(t *testing.T) {
 		DisableUpdateCheck:        true,
 		DisableAnonymousSignature: true,
 		HTTPConfig: HTTPConfig{
+			BlockEndpoints: []string{
+				"/v1/agent/self",
+				"/v1/acl",
+			},
 			ResponseHeaders: map[string]string{
 				"Access-Control-Allow-Origin": "*",
 			},

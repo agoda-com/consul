@@ -18,13 +18,20 @@ import (
 // HTTPServer provides an HTTP api for an agent.
 type HTTPServer struct {
 	*http.Server
-	agent *Agent
+	agent     *Agent
+	blacklist *Blacklist
+
+	// proto is filled by the agent to "http" or "https".
 	proto string
 }
 
 func NewHTTPServer(addr string, a *Agent) *HTTPServer {
-	s := &HTTPServer{Server: &http.Server{Addr: addr}, agent: a}
-	s.Server.Handler = s.handler(s.agent.config.EnableDebug)
+	s := &HTTPServer{
+		Server:    &http.Server{Addr: addr},
+		agent:     a,
+		blacklist: NewBlacklist(a.config.HTTPConfig.BlockEndpoints),
+	}
+	s.Server.Handler = s.handler(a.config.EnableDebug)
 	return s
 }
 
@@ -181,6 +188,14 @@ func (s *HTTPServer) wrap(handler func(resp http.ResponseWriter, req *http.Reque
 				}
 				logURL = strings.Replace(logURL, token, "<hidden>", -1)
 			}
+		}
+
+		if s.blacklist.Block(req.URL.Path) {
+			errMsg := "Endpoint is blocked by agent configuration"
+			s.agent.logger.Printf("[ERR] http: Request %s %v, error: %v from=%s", req.Method, logURL, err, req.RemoteAddr)
+			resp.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(resp, errMsg)
+			return
 		}
 
 		handleErr := func(err error) {
@@ -361,16 +376,14 @@ func parseWait(resp http.ResponseWriter, req *http.Request, b *structs.QueryOpti
 }
 
 // parseConsistency is used to parse the ?stale and ?consistent query params.
-// allowStale forces stale consistency instead of default one if none was provided in the query.
 // Returns true on error
-func parseConsistency(resp http.ResponseWriter, req *http.Request, allowStale bool, b *structs.QueryOptions) bool {
+func parseConsistency(resp http.ResponseWriter, req *http.Request, b *structs.QueryOptions) bool {
 	query := req.URL.Query()
-	if _, ok := query["consistent"]; ok {
-		b.RequireConsistent = true
-	}
-	b.AllowStale = !b.RequireConsistent && allowStale
 	if _, ok := query["stale"]; ok {
 		b.AllowStale = true
+	}
+	if _, ok := query["consistent"]; ok {
+		b.RequireConsistent = true
 	}
 	if b.AllowStale && b.RequireConsistent {
 		resp.WriteHeader(http.StatusBadRequest) // 400
@@ -438,8 +451,7 @@ func (s *HTTPServer) parseMetaFilter(req *http.Request) map[string]string {
 func (s *HTTPServer) parse(resp http.ResponseWriter, req *http.Request, dc *string, b *structs.QueryOptions) bool {
 	s.parseDC(req, dc)
 	s.parseToken(req, &b.Token)
-	allowStale := s.agent.config.HTTPConfig.AllowStale
-	if parseConsistency(resp, req, *allowStale, b) {
+	if parseConsistency(resp, req, b) {
 		return true
 	}
 	return parseWait(resp, req, b)

@@ -29,7 +29,6 @@ import (
 	"github.com/hashicorp/consul/logger"
 	"github.com/hashicorp/consul/types"
 	"github.com/hashicorp/consul/watch"
-	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-sockaddr/template"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/raft"
@@ -105,7 +104,7 @@ type Agent struct {
 
 	// state stores a local representation of the node,
 	// services and checks. Used for anti-entropy.
-	state localState
+	state *localState
 
 	// checkReapAfter maps the check ID to a timeout after which we should
 	// reap its associated service
@@ -174,6 +173,10 @@ type Agent struct {
 
 	// wgServers is the wait group for all HTTP and DNS servers
 	wgServers sync.WaitGroup
+
+	// watchPlans tracks all the currently-running watch plans for the
+	// agent.
+	watchPlans []*watch.Plan
 }
 
 func New(c *Config) (*Agent, error) {
@@ -218,6 +221,53 @@ func New(c *Config) (*Agent, error) {
 	if err := a.resolveTmplAddrs(); err != nil {
 		return nil, err
 	}
+
+	// Try to get an advertise address
+	switch {
+	case a.config.AdvertiseAddr != "":
+		ipStr, err := parseSingleIPTemplate(a.config.AdvertiseAddr)
+		if err != nil {
+			return nil, fmt.Errorf("Advertise address resolution failed: %v", err)
+		}
+		if net.ParseIP(ipStr) == nil {
+			return nil, fmt.Errorf("Failed to parse advertise address: %v", ipStr)
+		}
+		a.config.AdvertiseAddr = ipStr
+
+	case a.config.BindAddr != "" && !ipaddr.IsAny(a.config.BindAddr):
+		a.config.AdvertiseAddr = a.config.BindAddr
+
+	default:
+		ip, err := consul.GetPrivateIP()
+		if ipaddr.IsAnyV6(a.config.BindAddr) {
+			ip, err = consul.GetPublicIPv6()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Failed to get advertise address: %v", err)
+		}
+		a.config.AdvertiseAddr = ip.String()
+	}
+
+	// Try to get an advertise address for the wan
+	if a.config.AdvertiseAddrWan != "" {
+		ipStr, err := parseSingleIPTemplate(a.config.AdvertiseAddrWan)
+		if err != nil {
+			return nil, fmt.Errorf("Advertise WAN address resolution failed: %v", err)
+		}
+		if net.ParseIP(ipStr) == nil {
+			return nil, fmt.Errorf("Failed to parse advertise address for WAN: %v", ipStr)
+		}
+		a.config.AdvertiseAddrWan = ipStr
+	} else {
+		a.config.AdvertiseAddrWan = a.config.AdvertiseAddr
+	}
+
+	// Create the default set of tagged addresses.
+	a.config.TaggedAddresses = map[string]string{
+		"lan": a.config.AdvertiseAddr,
+		"wan": a.config.AdvertiseAddrWan,
+	}
+
 	return a, nil
 }
 
@@ -238,33 +288,35 @@ func (a *Agent) Start() error {
 		return fmt.Errorf("Failed to setup node ID: %v", err)
 	}
 
+	// create the local state
+	a.state = NewLocalState(c, a.logger)
+
+	// create the config for the rpc server/client
+	consulCfg, err := a.consulConfig()
+	if err != nil {
+		return err
+	}
+
+	// link consul client/server with the state
+	consulCfg.ServerUp = a.state.ConsulServerUp
+
 	// Setup either the client or the server.
 	if c.Server {
-		server, err := a.makeServer()
+		server, err := consul.NewServerLogger(consulCfg, a.logger)
 		if err != nil {
-			return err
+			return fmt.Errorf("Failed to start Consul server: %v", err)
 		}
 
 		a.delegate = server
-		a.state.Init(c, a.logger, server)
-
-		// Automatically register the "consul" service on server nodes
-		consulService := structs.NodeService{
-			Service: consul.ConsulServiceName,
-			ID:      consul.ConsulServiceID,
-			Port:    c.Ports.Server,
-			Tags:    []string{},
-		}
-
-		a.state.AddService(&consulService, c.GetTokenForAgent())
+		a.state.delegate = server
 	} else {
-		client, err := a.makeClient()
+		client, err := consul.NewClientLogger(consulCfg, a.logger)
 		if err != nil {
-			return err
+			return fmt.Errorf("Failed to start Consul client: %v", err)
 		}
 
 		a.delegate = client
-		a.state.Init(c, a.logger, client)
+		a.state.delegate = client
 	}
 
 	// Load checks/services/metadata.
@@ -317,7 +369,7 @@ func (a *Agent) Start() error {
 	}
 
 	// register watches
-	if err := a.registerWatches(); err != nil {
+	if err := a.reloadWatches(a.config); err != nil {
 		return err
 	}
 
@@ -496,11 +548,11 @@ func (a *Agent) serveHTTP(l net.Listener, srv *HTTPServer) error {
 	}
 }
 
-func (a *Agent) registerWatches() error {
-	if len(a.config.WatchPlans) == 0 {
-		return nil
-	}
-	addrs, err := a.config.HTTPAddrs()
+// reloadWatches stops any existing watch plans and attempts to load the given
+// set of watches.
+func (a *Agent) reloadWatches(cfg *Config) error {
+	// Watches use the API to talk to this agent, so that must be enabled.
+	addrs, err := cfg.HTTPAddrs()
 	if err != nil {
 		return err
 	}
@@ -508,7 +560,15 @@ func (a *Agent) registerWatches() error {
 		return fmt.Errorf("watch plans require an HTTP or HTTPS endpoint")
 	}
 
-	for _, wp := range a.config.WatchPlans {
+	// Stop the current watches.
+	for _, wp := range a.watchPlans {
+		wp.Stop()
+	}
+	a.watchPlans = nil
+
+	// Fire off a goroutine for each new watch plan.
+	for _, wp := range cfg.WatchPlans {
+		a.watchPlans = append(a.watchPlans, wp)
 		go func(wp *watch.Plan) {
 			wp.Handler = makeWatchHandler(a.LogOutput, wp.Exempt["handler"])
 			wp.LogOutput = a.LogOutput
@@ -517,7 +577,7 @@ func (a *Agent) registerWatches() error {
 				addr = "unix://" + addr
 			}
 			if err := wp.Run(addr); err != nil {
-				a.logger.Println("[ERR] Failed to run watch: %v", err)
+				a.logger.Printf("[ERR] Failed to run watch: %v", err)
 			}
 		}(wp)
 	}
@@ -528,8 +588,13 @@ func (a *Agent) registerWatches() error {
 func (a *Agent) consulConfig() (*consul.Config, error) {
 	// Start with the provided config or default config
 	base := consul.DefaultConfig()
+
+	// a.config.ConsulConfig, if set, is a partial configuration for the
+	// consul server or client. Therefore, clone and augment it but
+	// don't use it as base directly.
 	if a.config.ConsulConfig != nil {
-		base = a.config.ConsulConfig
+		base = new(consul.Config)
+		*base = *a.config.ConsulConfig
 	}
 
 	// This is set when the agent starts up
@@ -578,51 +643,6 @@ func (a *Agent) consulConfig() (*consul.Config, error) {
 	}
 	if a.config.SerfWanBindAddr != "" {
 		base.SerfWANConfig.MemberlistConfig.BindAddr = a.config.SerfWanBindAddr
-	}
-	// Try to get an advertise address
-	switch {
-	case a.config.AdvertiseAddr != "":
-		ipStr, err := parseSingleIPTemplate(a.config.AdvertiseAddr)
-		if err != nil {
-			return nil, fmt.Errorf("Advertise address resolution failed: %v", err)
-		}
-		if net.ParseIP(ipStr) == nil {
-			return nil, fmt.Errorf("Failed to parse advertise address: %v", ipStr)
-		}
-		a.config.AdvertiseAddr = ipStr
-
-	case a.config.BindAddr != "" && !ipaddr.IsAny(a.config.BindAddr):
-		a.config.AdvertiseAddr = a.config.BindAddr
-
-	default:
-		ip, err := consul.GetPrivateIP()
-		if ipaddr.IsAnyV6(a.config.BindAddr) {
-			ip, err = consul.GetPublicIPv6()
-		}
-		if err != nil {
-			return nil, fmt.Errorf("Failed to get advertise address: %v", err)
-		}
-		a.config.AdvertiseAddr = ip.String()
-	}
-
-	// Try to get an advertise address for the wan
-	if a.config.AdvertiseAddrWan != "" {
-		ipStr, err := parseSingleIPTemplate(a.config.AdvertiseAddrWan)
-		if err != nil {
-			return nil, fmt.Errorf("Advertise WAN address resolution failed: %v", err)
-		}
-		if net.ParseIP(ipStr) == nil {
-			return nil, fmt.Errorf("Failed to parse advertise address for WAN: %v", ipStr)
-		}
-		a.config.AdvertiseAddrWan = ipStr
-	} else {
-		a.config.AdvertiseAddrWan = a.config.AdvertiseAddr
-	}
-
-	// Create the default set of tagged addresses.
-	a.config.TaggedAddresses = map[string]string{
-		"lan": a.config.AdvertiseAddr,
-		"wan": a.config.AdvertiseAddrWan,
 	}
 
 	if a.config.AdvertiseAddr != "" {
@@ -763,9 +783,6 @@ func (a *Agent) consulConfig() (*consul.Config, error) {
 	base.TLSCipherSuites = a.config.TLSCipherSuites
 	base.TLSPreferServerCipherSuites = a.config.TLSPreferServerCipherSuites
 
-	// Setup the ServerUp callback
-	base.ServerUp = a.state.ConsulServerUp
-
 	// Setup the user event callback
 	base.UserEventHandler = func(e serf.UserEvent) {
 		select {
@@ -776,6 +793,13 @@ func (a *Agent) consulConfig() (*consul.Config, error) {
 
 	// Setup the loggers
 	base.LogOutput = a.LogOutput
+
+	if !a.config.DisableKeyringFile {
+		if err := a.setupKeyrings(base); err != nil {
+			return nil, fmt.Errorf("Failed to configure keyring: %v", err)
+		}
+	}
+
 	return base, nil
 }
 
@@ -886,42 +910,6 @@ func (a *Agent) resolveTmplAddrs() error {
 	return nil
 }
 
-// makeServer creates a new consul server.
-func (a *Agent) makeServer() (*consul.Server, error) {
-	config, err := a.consulConfig()
-	if err != nil {
-		return nil, err
-	}
-	if !a.config.DisableKeyringFile {
-		if err := a.setupKeyrings(config); err != nil {
-			return nil, fmt.Errorf("Failed to configure keyring: %v", err)
-		}
-	}
-	server, err := consul.NewServerLogger(config, a.logger)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to start Consul server: %v", err)
-	}
-	return server, nil
-}
-
-// makeClient creates a new consul client.
-func (a *Agent) makeClient() (*consul.Client, error) {
-	config, err := a.consulConfig()
-	if err != nil {
-		return nil, err
-	}
-	if !a.config.DisableKeyringFile {
-		if err := a.setupKeyrings(config); err != nil {
-			return nil, fmt.Errorf("Failed to configure keyring: %v", err)
-		}
-	}
-	client, err := consul.NewClientLogger(config, a.logger)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to start Consul client: %v", err)
-	}
-	return client, nil
-}
-
 // makeRandomID will generate a random UUID for a node.
 func (a *Agent) makeRandomID() (string, error) {
 	id, err := uuid.GenerateUUID()
@@ -940,7 +928,7 @@ func (a *Agent) makeRandomID() (string, error) {
 // gopsutil change implementations without affecting in-place upgrades of nodes.
 func (a *Agent) makeNodeID() (string, error) {
 	// If they've disabled host-based IDs then just make a random one.
-	if a.config.DisableHostNodeID {
+	if *a.config.DisableHostNodeID {
 		return a.makeRandomID()
 	}
 
@@ -1228,7 +1216,7 @@ func (a *Agent) JoinLAN(addrs []string) (n int, err error) {
 	a.logger.Printf("[INFO] agent: (LAN) joined: %d Err: %v", n, err)
 	if err == nil && a.joinLANNotifier != nil {
 		if notifErr := a.joinLANNotifier.Notify(systemd.Ready); notifErr != nil {
-			a.logger.Printf("[DEBUG] agent: systemd notify failed: ", notifErr)
+			a.logger.Printf("[DEBUG] agent: systemd notify failed: %v", notifErr)
 		}
 	}
 	return
@@ -1311,17 +1299,17 @@ func (a *Agent) sendCoordinate() {
 			members := a.LANMembers()
 			grok, err := consul.CanServersUnderstandProtocol(members, 3)
 			if err != nil {
-				a.logger.Printf("[ERR] agent: failed to check servers: %s", err)
+				a.logger.Printf("[ERR] agent: Failed to check servers: %s", err)
 				continue
 			}
 			if !grok {
-				a.logger.Printf("[DEBUG] agent: skipping coordinate updates until servers are upgraded")
+				a.logger.Printf("[DEBUG] agent: Skipping coordinate updates until servers are upgraded")
 				continue
 			}
 
 			c, err := a.GetLANCoordinate()
 			if err != nil {
-				a.logger.Printf("[ERR] agent: failed to get coordinate: %s", err)
+				a.logger.Printf("[ERR] agent: Failed to get coordinate: %s", err)
 				continue
 			}
 
@@ -1333,7 +1321,11 @@ func (a *Agent) sendCoordinate() {
 			}
 			var reply struct{}
 			if err := a.RPC("Coordinate.Update", &req, &reply); err != nil {
-				a.logger.Printf("[ERR] agent: coordinate update error: %s", err)
+				if strings.Contains(err.Error(), permissionDenied) {
+					a.logger.Printf("[WARN] agent: Coordinate update blocked by ACLs")
+				} else {
+					a.logger.Printf("[ERR] agent: Coordinate update error: %v", err)
+				}
 				continue
 			}
 		case <-a.shutdownCh:
@@ -1563,13 +1555,6 @@ func (a *Agent) AddService(service *structs.NodeService, chkTypes []*structs.Che
 // RemoveService is used to remove a service entry.
 // The agent will make a best effort to ensure it is deregistered
 func (a *Agent) RemoveService(serviceID string, persist bool) error {
-	// Protect "consul" service from deletion by a user
-	if _, ok := a.delegate.(*consul.Server); ok && serviceID == consul.ConsulServiceID {
-		return fmt.Errorf(
-			"Deregistering the %s service is not allowed",
-			consul.ConsulServiceID)
-	}
-
 	// Validate ServiceID
 	if serviceID == "" {
 		return fmt.Errorf("ServiceID missing")
@@ -1633,7 +1618,7 @@ func (a *Agent) AddCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 			}
 
 			ttl := &CheckTTL{
-				Notify:  &a.state,
+				Notify:  a.state,
 				CheckID: check.CheckID,
 				TTL:     chkType.TTL,
 				Logger:  a.logger,
@@ -1659,7 +1644,7 @@ func (a *Agent) AddCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 			}
 
 			http := &CheckHTTP{
-				Notify:        &a.state,
+				Notify:        a.state,
 				CheckID:       check.CheckID,
 				HTTP:          chkType.HTTP,
 				Header:        chkType.Header,
@@ -1683,7 +1668,7 @@ func (a *Agent) AddCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 			}
 
 			tcp := &CheckTCP{
-				Notify:   &a.state,
+				Notify:   a.state,
 				CheckID:  check.CheckID,
 				TCP:      chkType.TCP,
 				Interval: chkType.Interval,
@@ -1704,7 +1689,7 @@ func (a *Agent) AddCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 			}
 
 			dockerCheck := &CheckDocker{
-				Notify:            &a.state,
+				Notify:            a.state,
 				CheckID:           check.CheckID,
 				DockerContainerID: chkType.DockerContainerID,
 				Shell:             chkType.Shell,
@@ -1728,7 +1713,7 @@ func (a *Agent) AddCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 			}
 
 			monitor := &CheckMonitor{
-				Notify:   &a.state,
+				Notify:   a.state,
 				CheckID:  check.CheckID,
 				Script:   chkType.Script,
 				Interval: chkType.Interval,
@@ -2071,9 +2056,6 @@ func (a *Agent) loadServices(conf *Config) error {
 // known to the local agent.
 func (a *Agent) unloadServices() error {
 	for _, service := range a.state.Services() {
-		if service.ID == consul.ConsulServiceID {
-			continue
-		}
 		if err := a.RemoveService(service.ID, false); err != nil {
 			return fmt.Errorf("Failed deregistering service '%s': %v", service.ID, err)
 		}
@@ -2302,9 +2284,7 @@ func (a *Agent) DisableNodeMaintenance() {
 	a.logger.Printf("[INFO] agent: Node left maintenance mode")
 }
 
-func (a *Agent) ReloadConfig(newCfg *Config) (bool, error) {
-	var errs error
-
+func (a *Agent) ReloadConfig(newCfg *Config) error {
 	// Bulk update the services and checks
 	a.PauseSync()
 	defer a.ResumeSync()
@@ -2316,50 +2296,27 @@ func (a *Agent) ReloadConfig(newCfg *Config) (bool, error) {
 	// First unload all checks, services, and metadata. This lets us begin the reload
 	// with a clean slate.
 	if err := a.unloadServices(); err != nil {
-		errs = multierror.Append(errs, fmt.Errorf("Failed unloading services: %s", err))
-		return false, errs
+		return fmt.Errorf("Failed unloading services: %s", err)
 	}
 	if err := a.unloadChecks(); err != nil {
-		errs = multierror.Append(errs, fmt.Errorf("Failed unloading checks: %s", err))
-		return false, errs
+		return fmt.Errorf("Failed unloading checks: %s", err)
 	}
 	a.unloadMetadata()
 
 	// Reload service/check definitions and metadata.
 	if err := a.loadServices(newCfg); err != nil {
-		errs = multierror.Append(errs, fmt.Errorf("Failed reloading services: %s", err))
-		return false, errs
+		return fmt.Errorf("Failed reloading services: %s", err)
 	}
 	if err := a.loadChecks(newCfg); err != nil {
-		errs = multierror.Append(errs, fmt.Errorf("Failed reloading checks: %s", err))
-		return false, errs
+		return fmt.Errorf("Failed reloading checks: %s", err)
 	}
 	if err := a.loadMetadata(newCfg); err != nil {
-		errs = multierror.Append(errs, fmt.Errorf("Failed reloading metadata: %s", err))
-		return false, errs
+		return fmt.Errorf("Failed reloading metadata: %s", err)
 	}
 
-	// Get the new client listener addr
-	httpAddr, err := newCfg.ClientListener(a.config.Addresses.HTTP, a.config.Ports.HTTP)
-	if err != nil {
-		errs = multierror.Append(errs, fmt.Errorf("Failed to determine HTTP address: %v", err))
+	if err := a.reloadWatches(newCfg); err != nil {
+		return fmt.Errorf("Failed reloading watches: %v", err)
 	}
 
-	// Deregister the old watches
-	for _, wp := range a.config.WatchPlans {
-		wp.Stop()
-	}
-
-	// Register the new watches
-	for _, wp := range newCfg.WatchPlans {
-		go func(wp *watch.Plan) {
-			wp.Handler = makeWatchHandler(a.LogOutput, wp.Exempt["handler"])
-			wp.LogOutput = a.LogOutput
-			if err := wp.Run(httpAddr.String()); err != nil {
-				errs = multierror.Append(errs, fmt.Errorf("Error running watch: %v", err))
-			}
-		}(wp)
-	}
-
-	return true, errs
+	return nil
 }

@@ -321,7 +321,7 @@ App.AclsController = Ember.ArrayController.extend({
   filterText: "Filter by name or ID",
   searchBar: true,
   newAclButton: true,
-  types: ["management", "client"],
+  types: ["client", "management"],
 
   dc: Ember.computed.alias("controllers.dc"),
   items: Ember.computed.alias("acls"),
@@ -391,7 +391,7 @@ App.AclsShowController = Ember.ObjectController.extend({
   needs: ["dc", "acls"],
   dc: Ember.computed.alias("controllers.dc"),
   isLoading: false,
-  types: ["management", "client"],
+  types: ["client", "management"],
 
   actions: {
     set: function() {
@@ -508,6 +508,23 @@ App.SettingsController = Ember.ObjectController.extend({
         notify('Settings reset', 3000);
         this.set('isLoading', false);
       }
+    },
+
+    close: function() {
+      this.transitionToRoute('index');
+    }
+  }
+});
+
+App.ErrorController = Ember.ObjectController.extend({
+  actions: {
+    resetToken: function() {
+      App.set('settings.token', '');
+      this.transitionToRoute('settings');
+    },
+
+    backHome: function() {
+      this.transitionToRoute('index');
     }
   }
 });

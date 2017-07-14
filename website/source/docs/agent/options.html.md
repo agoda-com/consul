@@ -141,7 +141,11 @@ will exit with an error at startup.
 * <a name="_disable_host_node_id"></a><a href="#_disable_host_node_id">`-disable-host-node-id`</a> - Setting
   this to true will prevent Consul from using information from the host to generate a deterministic node ID,
   and will instead generate a random node ID which will be persisted in the data directory. This is useful
-  when running multiple Consul agents on the same host for testing. This defaults to false.
+  when running multiple Consul agents on the same host for testing. This defaults to false in Consul prior
+  to version 0.8.5 and in 0.8.5 and later defaults to true, so you must opt-in for host-based IDs. Host-based
+  IDs are generated using https://github.com/shirou/gopsutil/tree/master/host, which is shared with HashiCorp's
+  [Nomad](https://www.nomadproject.io/), so if you opt-in to host-based IDs then Consul and Nomad will use
+  information on the host to automatically assign the same ID in both systems.
 
 * <a name="_dns_port"></a><a href="#_dns_port">`-dns-port`</a> - the DNS port to listen on.
   This overrides the default port 8600. This is available in Consul 0.7 and later.
@@ -745,7 +749,7 @@ Consul will not enable TLS for the HTTP API unless the `https` port has been ass
       }
     ```
 
-  This has been deprecated in Consul 0.9.0. Setting this value will set `http_config.response_headers`
+  This has been deprecated in Consul 0.8.5. Setting this value will set `http_config.response_headers`
   instead for backwards compatibility.
 
 * <a name="http_config"></a><a href="#http_config">`http_config`</a>
@@ -753,12 +757,17 @@ Consul will not enable TLS for the HTTP API unless the `https` port has been ass
   <br><br>
   The following sub-keys are available:
 
-  * <a name="allow_stale"></a><a href="#allow_stale">`allow_stale`</a> - Enables a stale query
-  for DNS information. This allows any Consul server, rather than only the leader, to service
-  the request. The advantage of this is you get linear read scalability with Consul servers.
-  In versions of Consul prior to 0.7, this defaulted to false, meaning all requests are serviced
-  by the leader, providing stronger consistency but less throughput and higher latency. In Consul
-  0.7 and later, this defaults to true for better utilization of available servers.
+  * <a name="block_endpoints"></a><a href="#block_endpoints">`block_endpoints`</a>
+    This object is a list of HTTP endpoint prefixes to block on the agent, and defaults to
+    an empty list, meaning all endpoints are enabled. Any endpoint that has a common prefix
+    with one of the entries on this list will be blocked and will return a 403 response code
+    when accessed. For example, to block all of the V1 ACL endpoints, set this to
+    `["/v1/acl"]`, which will block `/v1/acl/create`, `/v1/acl/update`, and the other ACL
+    endpoints that begin with `/v1/acl`. Any CLI commands that use disabled endpoints will
+    no longer function as well. For more general access control, Consul's
+    [ACL system](/docs/guides/acl.html) should be used, but this option is useful for removing
+    access to HTTP endpoints completely, or on specific agents. This is available in Consul
+    0.9.0 and later.
 
   * <a name="response_headers"></a><a href="#response_headers">`response_headers`</a>
     This object allows adding headers to the HTTP API responses.
@@ -1168,7 +1177,7 @@ Consul will not enable TLS for the HTTP API unless the `https` port has been ass
 
 ## <a id="ports"></a>Ports Used
 
-Consul requires up to 5 different ports to work properly, some on
+Consul requires up to 6 different ports to work properly, some on
 TCP, UDP, or both protocols. Below we document the requirements for each
 port.
 
@@ -1179,7 +1188,10 @@ port.
   Required by all agents. TCP and UDP.
 
 * Serf WAN (Default 8302). This is used by servers to gossip over the
-  WAN to other servers. TCP and UDP.
+  WAN to other servers. TCP and UDP. As of Consul 0.8, it is recommended to
+  enable connection between servers through port 8302 for both TCP and UDP on
+  the LAN interface as well for the WAN Join Flooding feature. See also:
+  [Consul 0.8.0 CHANGELOG](https://github.com/hashicorp/consul/blob/master/CHANGELOG.md#080-april-5-2017) and [GH-3058](https://github.com/hashicorp/consul/issues/3058)
 
 * CLI RPC (Default 8400). This is used by all agents to handle RPC
   from the CLI, but is deprecated in Consul 0.8 and later. TCP only.

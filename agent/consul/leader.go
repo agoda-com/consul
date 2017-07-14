@@ -18,13 +18,8 @@ import (
 )
 
 const (
-	SerfCheckID           types.CheckID = "serfHealth"
-	SerfCheckName                       = "Serf Health Status"
-	SerfCheckAliveOutput                = "Agent alive and reachable"
-	SerfCheckFailedOutput               = "Agent not live or unreachable"
-	ConsulServiceID                     = "consul"
-	ConsulServiceName                   = "consul"
-	newLeaderEvent                      = "consul:new-leader"
+	newLeaderEvent      = "consul:new-leader"
+	barrierWriteTimeout = 2 * time.Minute
 )
 
 // monitorLeadership is used to monitor if we acquire or lose our role
@@ -35,13 +30,13 @@ func (s *Server) monitorLeadership() {
 	// leaderCh, which is only notified best-effort. Doing this ensures
 	// that we get all notifications in order, which is required for
 	// cleanup and to ensure we never run multiple leader loops.
-	leaderCh := s.leaderCh
+	raftNotifyCh := s.raftNotifyCh
 
 	var wg sync.WaitGroup
 	var stopCh chan struct{}
 	for {
 		select {
-		case isLeader := <-leaderCh:
+		case isLeader := <-raftNotifyCh:
 			if isLeader {
 				stopCh = make(chan struct{})
 				wg.Add(1)
@@ -96,10 +91,10 @@ RECONCILE:
 
 	// Apply a raft barrier to ensure our FSM is caught up
 	start := time.Now()
-	barrier := s.raft.Barrier(0)
+	barrier := s.raft.Barrier(barrierWriteTimeout)
 	if err := barrier.Error(); err != nil {
 		s.logger.Printf("[ERR] consul: failed to wait for barrier: %v", err)
-		goto WAIT
+		return
 	}
 	metrics.MeasureSince([]string{"consul", "leader", "barrier"}, start)
 
@@ -333,7 +328,7 @@ func (s *Server) reconcileReaped(known map[string]struct{}) error {
 	}
 	for _, check := range checks {
 		// Ignore any non serf checks
-		if check.CheckID != SerfCheckID {
+		if check.CheckID != structs.SerfCheckID {
 			continue
 		}
 
@@ -358,7 +353,7 @@ func (s *Server) reconcileReaped(known map[string]struct{}) error {
 		}
 		serverPort := 0
 		for _, service := range services.Services {
-			if service.ID == ConsulServiceID {
+			if service.ID == structs.ConsulServiceID {
 				serverPort = service.Port
 				break
 			}
@@ -429,8 +424,8 @@ func (s *Server) handleAliveMember(member serf.Member) error {
 	var service *structs.NodeService
 	if valid, parts := agent.IsConsulServer(member); valid {
 		service = &structs.NodeService{
-			ID:      ConsulServiceID,
-			Service: ConsulServiceName,
+			ID:      structs.ConsulServiceID,
+			Service: structs.ConsulServiceName,
 			Port:    parts.Port,
 		}
 
@@ -472,7 +467,7 @@ func (s *Server) handleAliveMember(member serf.Member) error {
 			return err
 		}
 		for _, check := range checks {
-			if check.CheckID == SerfCheckID && check.Status == api.HealthPassing {
+			if check.CheckID == structs.SerfCheckID && check.Status == api.HealthPassing {
 				return nil
 			}
 		}
@@ -489,10 +484,10 @@ AFTER_CHECK:
 		Service:    service,
 		Check: &structs.HealthCheck{
 			Node:    member.Name,
-			CheckID: SerfCheckID,
-			Name:    SerfCheckName,
+			CheckID: structs.SerfCheckID,
+			Name:    structs.SerfCheckName,
 			Status:  api.HealthPassing,
-			Output:  SerfCheckAliveOutput,
+			Output:  structs.SerfCheckAliveOutput,
 		},
 
 		// If there's existing information about the node, do not
@@ -519,7 +514,7 @@ func (s *Server) handleFailedMember(member serf.Member) error {
 			return err
 		}
 		for _, check := range checks {
-			if check.CheckID == SerfCheckID && check.Status == api.HealthCritical {
+			if check.CheckID == structs.SerfCheckID && check.Status == api.HealthCritical {
 				return nil
 			}
 		}
@@ -534,10 +529,10 @@ func (s *Server) handleFailedMember(member serf.Member) error {
 		Address:    member.Addr.String(),
 		Check: &structs.HealthCheck{
 			Node:    member.Name,
-			CheckID: SerfCheckID,
-			Name:    SerfCheckName,
+			CheckID: structs.SerfCheckID,
+			Name:    structs.SerfCheckName,
 			Status:  api.HealthCritical,
-			Output:  SerfCheckFailedOutput,
+			Output:  structs.SerfCheckFailedOutput,
 		},
 
 		// If there's existing information about the node, do not

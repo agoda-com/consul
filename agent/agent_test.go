@@ -306,22 +306,32 @@ func TestAgent_makeNodeID(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	// Calling again should yield the same ID since it's host-based.
+	// Calling again should yield a random ID by default.
 	another, err := a.makeNodeID()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if id != another {
+	if id == another {
 		t.Fatalf("bad: %s vs %s", id, another)
 	}
 
-	// Turn off host-based IDs and try again. We should get a random ID.
-	a.Config.DisableHostNodeID = true
-	another, err = a.makeNodeID()
+	// Turn on host-based IDs and try again. We should get the same ID
+	// each time (and a different one from the random one above).
+	a.Config.DisableHostNodeID = Bool(false)
+	id, err = a.makeNodeID()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if id == another {
+		t.Fatalf("bad: %s vs %s", id, another)
+	}
+
+	// Calling again should yield the host-based ID.
+	another, err = a.makeNodeID()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if id != another {
 		t.Fatalf("bad: %s vs %s", id, another)
 	}
 }
@@ -480,11 +490,6 @@ func TestAgent_RemoveService(t *testing.T) {
 	// Remove a service that doesn't exist
 	if err := a.RemoveService("redis", false); err != nil {
 		t.Fatalf("err: %v", err)
-	}
-
-	// Remove the consul service
-	if err := a.RemoveService("consul", false); err == nil {
-		t.Fatalf("should have errored")
 	}
 
 	// Remove without an ID
@@ -869,28 +874,6 @@ func TestAgent_updateTTLCheck(t *testing.T) {
 	}
 	if status.Output != "foo" {
 		t.Fatalf("bad: %v", status)
-	}
-}
-
-func TestAgent_ConsulService(t *testing.T) {
-	t.Parallel()
-	a := NewTestAgent(t.Name(), nil)
-	defer a.Shutdown()
-
-	// Consul service is registered
-	services := a.state.Services()
-	if _, ok := services[consul.ConsulServiceID]; !ok {
-		t.Fatalf("%s service should be registered", consul.ConsulServiceID)
-	}
-
-	// Perform anti-entropy on consul service
-	if err := a.state.syncService(consul.ConsulServiceID); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-
-	// Consul service should be in sync
-	if !a.state.serviceStatus[consul.ConsulServiceID].inSync {
-		t.Fatalf("%s service should be in sync", consul.ConsulServiceID)
 	}
 }
 
@@ -1416,19 +1399,8 @@ func TestAgent_unloadServices(t *testing.T) {
 	if err := a.unloadServices(); err != nil {
 		t.Fatalf("err: %s", err)
 	}
-
-	// Make sure it was unloaded and the consul service remains
-	found = false
-	for id := range a.state.Services() {
-		if id == svc.ID {
-			t.Fatalf("should have unloaded services")
-		}
-		if id == consul.ConsulServiceID {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("consul service should not be removed")
+	if len(a.state.Services()) != 0 {
+		t.Fatalf("should have unloaded services")
 	}
 }
 
@@ -1497,9 +1469,9 @@ func TestAgent_Service_MaintenanceMode(t *testing.T) {
 }
 
 func TestAgent_Service_Reap(t *testing.T) {
-	t.Parallel()
+	// t.Parallel() // timing test. no parallel
 	cfg := TestConfig()
-	cfg.CheckReapInterval = time.Millisecond
+	cfg.CheckReapInterval = 50 * time.Millisecond
 	cfg.CheckDeregisterIntervalMin = 0
 	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
@@ -1513,8 +1485,8 @@ func TestAgent_Service_Reap(t *testing.T) {
 	chkTypes := []*structs.CheckType{
 		&structs.CheckType{
 			Status: api.HealthPassing,
-			TTL:    10 * time.Millisecond,
-			DeregisterCriticalServiceAfter: 100 * time.Millisecond,
+			TTL:    25 * time.Millisecond,
+			DeregisterCriticalServiceAfter: 200 * time.Millisecond,
 		},
 	}
 
@@ -1531,8 +1503,8 @@ func TestAgent_Service_Reap(t *testing.T) {
 		t.Fatalf("should not have critical checks")
 	}
 
-	// Wait for the check TTL to fail.
-	time.Sleep(30 * time.Millisecond)
+	// Wait for the check TTL to fail but before the check is reaped.
+	time.Sleep(100 * time.Millisecond)
 	if _, ok := a.state.Services()["redis"]; !ok {
 		t.Fatalf("should have redis service")
 	}
@@ -1552,7 +1524,7 @@ func TestAgent_Service_Reap(t *testing.T) {
 	}
 
 	// Wait for the check TTL to fail again.
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	if _, ok := a.state.Services()["redis"]; !ok {
 		t.Fatalf("should have redis service")
 	}
@@ -1561,7 +1533,7 @@ func TestAgent_Service_Reap(t *testing.T) {
 	}
 
 	// Wait for the reap.
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(400 * time.Millisecond)
 	if _, ok := a.state.Services()["redis"]; ok {
 		t.Fatalf("redis service should have been reaped")
 	}
@@ -1571,9 +1543,9 @@ func TestAgent_Service_Reap(t *testing.T) {
 }
 
 func TestAgent_Service_NoReap(t *testing.T) {
-	t.Parallel()
+	// t.Parallel() // timing test. no parallel
 	cfg := TestConfig()
-	cfg.CheckReapInterval = time.Millisecond
+	cfg.CheckReapInterval = 50 * time.Millisecond
 	cfg.CheckDeregisterIntervalMin = 0
 	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
@@ -1587,7 +1559,7 @@ func TestAgent_Service_NoReap(t *testing.T) {
 	chkTypes := []*structs.CheckType{
 		&structs.CheckType{
 			Status: api.HealthPassing,
-			TTL:    10 * time.Millisecond,
+			TTL:    25 * time.Millisecond,
 		},
 	}
 
@@ -1605,7 +1577,7 @@ func TestAgent_Service_NoReap(t *testing.T) {
 	}
 
 	// Wait for the check TTL to fail.
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	if _, ok := a.state.Services()["redis"]; !ok {
 		t.Fatalf("should have redis service")
 	}
@@ -1614,7 +1586,7 @@ func TestAgent_Service_NoReap(t *testing.T) {
 	}
 
 	// Wait a while and make sure it doesn't reap.
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	if _, ok := a.state.Services()["redis"]; !ok {
 		t.Fatalf("should have redis service")
 	}

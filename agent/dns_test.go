@@ -32,30 +32,7 @@ const (
 // makeRecursor creates a generic DNS server which always returns
 // the provided reply. This is useful for mocking a DNS recursor with
 // an expected result.
-func makeRecursor(t *testing.T, answer []dns.RR) *dns.Server {
-	randomPort := TenPorts()
-	cfg := TestConfig()
-	dnsAddr := fmt.Sprintf("%s:%d", cfg.Addresses.DNS, randomPort)
-	mux := dns.NewServeMux()
-	mux.HandleFunc(".", func(resp dns.ResponseWriter, msg *dns.Msg) {
-		ans := &dns.Msg{Answer: answer[:]}
-		ans.SetReply(msg)
-		if err := resp.WriteMsg(ans); err != nil {
-			t.Fatalf("err: %s", err)
-		}
-	})
-	server := &dns.Server{
-		Addr:    dnsAddr,
-		Net:     "udp",
-		Handler: mux,
-	}
-	go server.ListenAndServe()
-	return server
-}
-
-func makeRecursorWithMessage(t *testing.T, answer dns.Msg) *dns.Server {
-	cfg := TestConfig()
-	dnsAddr := fmt.Sprintf("%s:%d", cfg.Addresses.DNS, cfg.Ports.DNS)
+func makeRecursor(t *testing.T, answer dns.Msg) *dns.Server {
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", func(resp dns.ResponseWriter, msg *dns.Msg) {
 		answer.SetReply(msg)
@@ -63,12 +40,16 @@ func makeRecursorWithMessage(t *testing.T, answer dns.Msg) *dns.Server {
 			t.Fatalf("err: %s", err)
 		}
 	})
+	up := make(chan struct{})
 	server := &dns.Server{
-		Addr:    dnsAddr,
-		Net:     "udp",
-		Handler: mux,
+		Addr:              "127.0.0.1:0",
+		Net:               "udp",
+		Handler:           mux,
+		NotifyStartedFunc: func() { close(up) },
 	}
 	go server.ListenAndServe()
+	<-up
+	server.Addr = server.PacketConn.LocalAddr().String()
 	return server
 }
 
@@ -317,9 +298,11 @@ func TestDNS_NodeLookup_AAAA(t *testing.T) {
 
 func TestDNS_NodeLookup_CNAME(t *testing.T) {
 	t.Parallel()
-	recursor := makeRecursor(t, []dns.RR{
-		dnsCNAME("www.google.com", "google.com"),
-		dnsA("google.com", "1.2.3.4"),
+	recursor := makeRecursor(t, dns.Msg{
+		Answer: []dns.RR{
+			dnsCNAME("www.google.com", "google.com"),
+			dnsA("google.com", "1.2.3.4"),
+		},
 	})
 	defer recursor.Shutdown()
 
@@ -1944,7 +1927,9 @@ func TestDNS_ServiceLookup_Dedup_SRV(t *testing.T) {
 
 func TestDNS_Recurse(t *testing.T) {
 	t.Parallel()
-	recursor := makeRecursor(t, []dns.RR{dnsA("apple.com", "1.2.3.4")})
+	recursor := makeRecursor(t, dns.Msg{
+		Answer: []dns.RR{dnsA("apple.com", "1.2.3.4")},
+	})
 	defer recursor.Shutdown()
 
 	cfg := TestConfig()
@@ -1972,12 +1957,11 @@ func TestDNS_Recurse(t *testing.T) {
 
 func TestDNS_Recurse_Truncation(t *testing.T) {
 	t.Parallel()
-	answerMessage := dns.Msg{
+
+	recursor := makeRecursor(t, dns.Msg{
 		MsgHdr: dns.MsgHdr{Truncated: true},
 		Answer: []dns.RR{dnsA("apple.com", "1.2.3.4")},
-	}
-
-	recursor := makeRecursorWithMessage(t, answerMessage)
+	})
 	defer recursor.Shutdown()
 
 	cfg := TestConfig()
@@ -2860,9 +2844,11 @@ func TestDNS_ServiceLookup_AnswerLimits(t *testing.T) {
 
 func TestDNS_ServiceLookup_CNAME(t *testing.T) {
 	t.Parallel()
-	recursor := makeRecursor(t, []dns.RR{
-		dnsCNAME("www.google.com", "google.com"),
-		dnsA("google.com", "1.2.3.4"),
+	recursor := makeRecursor(t, dns.Msg{
+		Answer: []dns.RR{
+			dnsCNAME("www.google.com", "google.com"),
+			dnsA("google.com", "1.2.3.4"),
+		},
 	})
 	defer recursor.Shutdown()
 
@@ -2955,9 +2941,11 @@ func TestDNS_ServiceLookup_CNAME(t *testing.T) {
 
 func TestDNS_NodeLookup_TTL(t *testing.T) {
 	t.Parallel()
-	recursor := makeRecursor(t, []dns.RR{
-		dnsCNAME("www.google.com", "google.com"),
-		dnsA("google.com", "1.2.3.4"),
+	recursor := makeRecursor(t, dns.Msg{
+		Answer: []dns.RR{
+			dnsCNAME("www.google.com", "google.com"),
+			dnsA("google.com", "1.2.3.4"),
+		},
 	})
 	defer recursor.Shutdown()
 
@@ -3627,54 +3615,54 @@ func TestDNS_ServiceLookup_SRV_RFC_TCP_Default(t *testing.T) {
 
 func TestDNS_ServiceLookup_FilterACL(t *testing.T) {
 	t.Parallel()
-	cfg := TestConfig()
-	cfg.ACLMasterToken = "root"
-	cfg.ACLDatacenter = "dc1"
-	cfg.ACLDownPolicy = "deny"
-	cfg.ACLDefaultPolicy = "deny"
-	a := NewTestAgent(t.Name(), cfg)
-	defer a.Shutdown()
+	tests := []struct {
+		token   string
+		results int
+	}{
+		{"root", 1},
+		{"anonymous", 0},
+	}
+	for _, tt := range tests {
+		t.Run("ACLToken == "+tt.token, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.ACLToken = tt.token
+			cfg.ACLMasterToken = "root"
+			cfg.ACLDatacenter = "dc1"
+			cfg.ACLDownPolicy = "deny"
+			cfg.ACLDefaultPolicy = "deny"
+			a := NewTestAgent(t.Name(), cfg)
+			defer a.Shutdown()
 
-	// Register a service
-	args := &structs.RegisterRequest{
-		Datacenter: "dc1",
-		Node:       "foo",
-		Address:    "127.0.0.1",
-		Service: &structs.NodeService{
-			Service: "foo",
-			Port:    12345,
-		},
-		WriteRequest: structs.WriteRequest{Token: "root"},
-	}
-	var out struct{}
-	if err := a.RPC("Catalog.Register", args, &out); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+			// Register a service
+			args := &structs.RegisterRequest{
+				Datacenter: "dc1",
+				Node:       "foo",
+				Address:    "127.0.0.1",
+				Service: &structs.NodeService{
+					Service: "foo",
+					Port:    12345,
+				},
+				WriteRequest: structs.WriteRequest{Token: "root"},
+			}
+			var out struct{}
+			if err := a.RPC("Catalog.Register", args, &out); err != nil {
+				t.Fatalf("err: %v", err)
+			}
 
-	// Set up the DNS query
-	c := new(dns.Client)
-	addr, _ := a.Config.ClientListener("", a.Config.Ports.DNS)
-	m := new(dns.Msg)
-	m.SetQuestion("foo.service.consul.", dns.TypeA)
+			// Set up the DNS query
+			c := new(dns.Client)
+			addr, _ := a.Config.ClientListener("", a.Config.Ports.DNS)
+			m := new(dns.Msg)
+			m.SetQuestion("foo.service.consul.", dns.TypeA)
 
-	// Query with the root token. Should get results.
-	a.Config.ACLToken = "root"
-	in, _, err := c.Exchange(m, addr.String())
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if len(in.Answer) != 1 {
-		t.Fatalf("Bad: %#v", in)
-	}
-
-	// Query with a non-root token without access. Should get nothing.
-	a.Config.ACLToken = "anonymous"
-	in, _, err = c.Exchange(m, addr.String())
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if len(in.Answer) != 0 {
-		t.Fatalf("Bad: %#v", in)
+			in, _, err := c.Exchange(m, addr.String())
+			if err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if len(in.Answer) != tt.results {
+				t.Fatalf("Bad: %#v", in)
+			}
+		})
 	}
 }
 
@@ -3931,15 +3919,16 @@ func TestDNS_PreparedQuery_AllowStale(t *testing.T) {
 	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
 
-	m := MockPreparedQuery{}
-	if err := a.registerEndpoint("PreparedQuery", &m); err != nil {
-		t.Fatalf("err: %v", err)
+	m := MockPreparedQuery{
+		executeFn: func(args *structs.PreparedQueryExecuteRequest, reply *structs.PreparedQueryExecuteResponse) error {
+			// Return a response that's perpetually too stale.
+			reply.LastContact = 2 * time.Second
+			return nil
+		},
 	}
 
-	m.executeFn = func(args *structs.PreparedQueryExecuteRequest, reply *structs.PreparedQueryExecuteResponse) error {
-		// Return a response that's perpetually too stale.
-		reply.LastContact = 2 * time.Second
-		return nil
+	if err := a.registerEndpoint("PreparedQuery", &m); err != nil {
+		t.Fatalf("err: %v", err)
 	}
 
 	// Make sure that the lookup terminates and results in an SOA since
@@ -4012,19 +4001,20 @@ func TestDNS_PreparedQuery_AgentSource(t *testing.T) {
 	a := NewTestAgent(t.Name(), nil)
 	defer a.Shutdown()
 
-	m := MockPreparedQuery{}
-	if err := a.registerEndpoint("PreparedQuery", &m); err != nil {
-		t.Fatalf("err: %v", err)
+	m := MockPreparedQuery{
+		executeFn: func(args *structs.PreparedQueryExecuteRequest, reply *structs.PreparedQueryExecuteResponse) error {
+			// Check that the agent inserted its self-name and datacenter to
+			// the RPC request body.
+			if args.Agent.Datacenter != a.Config.Datacenter ||
+				args.Agent.Node != a.Config.NodeName {
+				t.Fatalf("bad: %#v", args.Agent)
+			}
+			return nil
+		},
 	}
 
-	m.executeFn = func(args *structs.PreparedQueryExecuteRequest, reply *structs.PreparedQueryExecuteResponse) error {
-		// Check that the agent inserted its self-name and datacenter to
-		// the RPC request body.
-		if args.Agent.Datacenter != a.Config.Datacenter ||
-			args.Agent.Node != a.Config.NodeName {
-			t.Fatalf("bad: %#v", args.Agent)
-		}
-		return nil
+	if err := a.registerEndpoint("PreparedQuery", &m); err != nil {
+		t.Fatalf("err: %v", err)
 	}
 
 	{
@@ -4570,7 +4560,7 @@ func TestDNS_Compression_Query(t *testing.T) {
 		}
 
 		// Do a manual exchange with compression on (the default).
-		a.dns.config.DisableCompression = false
+		a.DNSDisableCompression(false)
 		if err := conn.WriteMsg(m); err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -4581,7 +4571,7 @@ func TestDNS_Compression_Query(t *testing.T) {
 		}
 
 		// Disable compression and try again.
-		a.dns.config.DisableCompression = true
+		a.DNSDisableCompression(true)
 		if err := conn.WriteMsg(m); err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -4635,7 +4625,7 @@ func TestDNS_Compression_ReverseLookup(t *testing.T) {
 	}
 
 	// Disable compression and try again.
-	a.dns.config.DisableCompression = true
+	a.DNSDisableCompression(true)
 	if err := conn.WriteMsg(m); err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -4653,7 +4643,9 @@ func TestDNS_Compression_ReverseLookup(t *testing.T) {
 
 func TestDNS_Compression_Recurse(t *testing.T) {
 	t.Parallel()
-	recursor := makeRecursor(t, []dns.RR{dnsA("apple.com", "1.2.3.4")})
+	recursor := makeRecursor(t, dns.Msg{
+		Answer: []dns.RR{dnsA("apple.com", "1.2.3.4")},
+	})
 	defer recursor.Shutdown()
 
 	cfg := TestConfig()
@@ -4681,7 +4673,7 @@ func TestDNS_Compression_Recurse(t *testing.T) {
 	}
 
 	// Disable compression and try again.
-	a.dns.config.DisableCompression = true
+	a.DNSDisableCompression(true)
 	if err := conn.WriteMsg(m); err != nil {
 		t.Fatalf("err: %v", err)
 	}

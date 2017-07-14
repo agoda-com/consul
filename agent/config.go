@@ -131,11 +131,9 @@ type DNSConfig struct {
 
 // HTTPConfig is used to fine tune the Http sub-system.
 type HTTPConfig struct {
-	// AllowStale is used to enable lookups with stale
-	// data. This gives horizontal read scalability since
-	// any Consul server can service the query instead of
-	// only the leader.
-	AllowStale *bool `mapstructure:"allow_stale"`
+	// BlockEndpoints is a list of endpoint prefixes to block in the
+	// HTTP API. Any requests to these will get a 403 response.
+	BlockEndpoints []string `mapstructure:"block_endpoints"`
 
 	// ResponseHeaders are used to add HTTP header response fields to the HTTP API responses.
 	ResponseHeaders map[string]string `mapstructure:"response_headers"`
@@ -402,7 +400,7 @@ type Config struct {
 	// DisableHostNodeID will prevent Consul from using information from the
 	// host to generate a node ID, and will cause Consul to generate a
 	// random ID instead.
-	DisableHostNodeID bool `mapstructure:"disable_host_node_id"`
+	DisableHostNodeID *bool `mapstructure:"disable_host_node_id"`
 
 	// Node name is the name we use to advertise. Defaults to hostname.
 	NodeName string `mapstructure:"node_name"`
@@ -803,7 +801,7 @@ type ProtoAddr struct {
 }
 
 func (p ProtoAddr) String() string {
-	return p.Proto + "+" + p.Net + "://" + p.Addr
+	return p.Proto + "://" + p.Addr
 }
 
 func (c *Config) DNSAddrs() ([]ProtoAddr, error) {
@@ -924,9 +922,6 @@ func DefaultConfig() *Config {
 			MaxStale:        10 * 365 * 24 * time.Hour,
 			RecursorTimeout: 2 * time.Second,
 		},
-		HTTPConfig: HTTPConfig{
-			AllowStale: Bool(true),
-		},
 		Telemetry: Telemetry{
 			StatsitePrefix: "consul",
 		},
@@ -959,6 +954,8 @@ func DefaultConfig() *Config {
 
 		EncryptVerifyIncoming: Bool(true),
 		EncryptVerifyOutgoing: Bool(true),
+
+		DisableHostNodeID: Bool(true),
 	}
 }
 
@@ -1616,7 +1613,7 @@ func MergeConfig(a, b *Config) *Config {
 	if b.NodeID != "" {
 		result.NodeID = b.NodeID
 	}
-	if b.DisableHostNodeID == true {
+	if b.DisableHostNodeID != nil {
 		result.DisableHostNodeID = b.DisableHostNodeID
 	}
 	if b.NodeName != "" {
@@ -2003,6 +2000,9 @@ func MergeConfig(a, b *Config) *Config {
 		result.SessionTTLMin = b.SessionTTLMin
 		result.SessionTTLMinRaw = b.SessionTTLMinRaw
 	}
+
+	result.HTTPConfig.BlockEndpoints = append(a.HTTPConfig.BlockEndpoints,
+		b.HTTPConfig.BlockEndpoints...)
 	if len(b.HTTPConfig.ResponseHeaders) > 0 {
 		if result.HTTPConfig.ResponseHeaders == nil {
 			result.HTTPConfig.ResponseHeaders = make(map[string]string)
@@ -2011,9 +2011,7 @@ func MergeConfig(a, b *Config) *Config {
 			result.HTTPConfig.ResponseHeaders[field] = value
 		}
 	}
-	if b.HTTPConfig.AllowStale != nil {
-		result.HTTPConfig.AllowStale = b.HTTPConfig.AllowStale
-	}
+
 	if len(b.Meta) != 0 {
 		if result.Meta == nil {
 			result.Meta = make(map[string]string)

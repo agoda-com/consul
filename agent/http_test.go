@@ -195,6 +195,42 @@ func TestSetMeta(t *testing.T) {
 	}
 }
 
+func TestHTTPAPI_BlockEndpoints(t *testing.T) {
+	t.Parallel()
+
+	cfg := TestConfig()
+	cfg.HTTPConfig.BlockEndpoints = []string{
+		"/v1/agent/self",
+	}
+
+	a := NewTestAgent(t.Name(), cfg)
+	defer a.Shutdown()
+
+	handler := func(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+		return nil, nil
+	}
+
+	// Try a blocked endpoint, which should get a 403.
+	{
+		req, _ := http.NewRequest("GET", "/v1/agent/self", nil)
+		resp := httptest.NewRecorder()
+		a.srv.wrap(handler)(resp, req)
+		if got, want := resp.Code, http.StatusForbidden; got != want {
+			t.Fatalf("bad response code got %d want %d", got, want)
+		}
+	}
+
+	// Make sure some other endpoint still works.
+	{
+		req, _ := http.NewRequest("GET", "/v1/agent/checks", nil)
+		resp := httptest.NewRecorder()
+		a.srv.wrap(handler)(resp, req)
+		if got, want := resp.Code, http.StatusOK; got != want {
+			t.Fatalf("bad response code got %d want %d", got, want)
+		}
+	}
+}
+
 func TestHTTPAPI_TranslateAddrHeader(t *testing.T) {
 	t.Parallel()
 	// Header should not be present if address translation is off.
@@ -436,36 +472,31 @@ func TestParseWait_InvalidIndex(t *testing.T) {
 func TestParseConsistency(t *testing.T) {
 	t.Parallel()
 	resp := httptest.NewRecorder()
+	var b structs.QueryOptions
 
-	tests := []struct {
-		url                   string
-		allowStale            bool
-		wantAllowStale        bool
-		wantRequireConsistent bool
-	}{
-		{"/v1/catalog/nodes?stale", false, true, false},
-		{"/v1/catalog/nodes?stale", true, true, false},
-		{"/v1/catalog/nodes?consistent", false, false, true},
-		{"/v1/catalog/nodes?consistent", true, false, true},
-		{"/v1/catalog/nodes", false, false, false},
-		{"/v1/catalog/nodes", true, true, false},
+	req, _ := http.NewRequest("GET", "/v1/catalog/nodes?stale", nil)
+	if d := parseConsistency(resp, req, &b); d {
+		t.Fatalf("unexpected done")
 	}
 
-	for _, tt := range tests {
-		name := fmt.Sprintf("url=%v, HTTP.AllowStale=%v", tt.url, tt.allowStale)
-		t.Run(name, func(t *testing.T) {
-			var q structs.QueryOptions
-			req, _ := http.NewRequest("GET", tt.url, nil)
-			if d := parseConsistency(resp, req, tt.allowStale, &q); d {
-				t.Fatalf("Failed to parse consistency.")
-			}
-			if got, want := q.AllowStale, tt.wantAllowStale; got != want {
-				t.Fatalf("got allowStale %v want %v", got, want)
-			}
-			if got, want := q.RequireConsistent, tt.wantRequireConsistent; got != want {
-				t.Fatalf("got requireConsistent %v want %v", got, want)
-			}
-		})
+	if !b.AllowStale {
+		t.Fatalf("Bad: %v", b)
+	}
+	if b.RequireConsistent {
+		t.Fatalf("Bad: %v", b)
+	}
+
+	b = structs.QueryOptions{}
+	req, _ = http.NewRequest("GET", "/v1/catalog/nodes?consistent", nil)
+	if d := parseConsistency(resp, req, &b); d {
+		t.Fatalf("unexpected done")
+	}
+
+	if b.AllowStale {
+		t.Fatalf("Bad: %v", b)
+	}
+	if !b.RequireConsistent {
+		t.Fatalf("Bad: %v", b)
 	}
 }
 
@@ -475,7 +506,7 @@ func TestParseConsistency_Invalid(t *testing.T) {
 	var b structs.QueryOptions
 
 	req, _ := http.NewRequest("GET", "/v1/catalog/nodes?stale&consistent", nil)
-	if d := parseConsistency(resp, req, false, &b); !d {
+	if d := parseConsistency(resp, req, &b); !d {
 		t.Fatalf("expected done")
 	}
 

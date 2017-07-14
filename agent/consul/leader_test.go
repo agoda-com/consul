@@ -14,6 +14,7 @@ import (
 )
 
 func TestLeader_RegisterMember(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServerWithConfig(t, func(c *Config) {
 		c.ACLDatacenter = "dc1"
 		c.ACLMasterToken = "root"
@@ -52,10 +53,10 @@ func TestLeader_RegisterMember(t *testing.T) {
 	if len(checks) != 1 {
 		t.Fatalf("client missing check")
 	}
-	if checks[0].CheckID != SerfCheckID {
+	if checks[0].CheckID != structs.SerfCheckID {
 		t.Fatalf("bad check: %v", checks[0])
 	}
-	if checks[0].Name != SerfCheckName {
+	if checks[0].Name != structs.SerfCheckName {
 		t.Fatalf("bad check: %v", checks[0])
 	}
 	if checks[0].Status != api.HealthPassing {
@@ -82,6 +83,7 @@ func TestLeader_RegisterMember(t *testing.T) {
 }
 
 func TestLeader_FailedMember(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServerWithConfig(t, func(c *Config) {
 		c.ACLDatacenter = "dc1"
 		c.ACLMasterToken = "root"
@@ -123,10 +125,10 @@ func TestLeader_FailedMember(t *testing.T) {
 	if len(checks) != 1 {
 		t.Fatalf("client missing check")
 	}
-	if checks[0].CheckID != SerfCheckID {
+	if checks[0].CheckID != structs.SerfCheckID {
 		t.Fatalf("bad check: %v", checks[0])
 	}
-	if checks[0].Name != SerfCheckName {
+	if checks[0].Name != structs.SerfCheckName {
 		t.Fatalf("bad check: %v", checks[0])
 	}
 
@@ -142,6 +144,7 @@ func TestLeader_FailedMember(t *testing.T) {
 }
 
 func TestLeader_LeftMember(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServerWithConfig(t, func(c *Config) {
 		c.ACLDatacenter = "dc1"
 		c.ACLMasterToken = "root"
@@ -187,6 +190,7 @@ func TestLeader_LeftMember(t *testing.T) {
 	})
 }
 func TestLeader_ReapMember(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServerWithConfig(t, func(c *Config) {
 		c.ACLDatacenter = "dc1"
 		c.ACLMasterToken = "root"
@@ -247,6 +251,7 @@ func TestLeader_ReapMember(t *testing.T) {
 }
 
 func TestLeader_Reconcile_ReapMember(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServerWithConfig(t, func(c *Config) {
 		c.ACLDatacenter = "dc1"
 		c.ACLMasterToken = "root"
@@ -265,8 +270,8 @@ func TestLeader_Reconcile_ReapMember(t *testing.T) {
 		Address:    "127.1.1.1",
 		Check: &structs.HealthCheck{
 			Node:    "no-longer-around",
-			CheckID: SerfCheckID,
-			Name:    SerfCheckName,
+			CheckID: structs.SerfCheckID,
+			Name:    structs.SerfCheckName,
 			Status:  api.HealthCritical,
 		},
 		WriteRequest: structs.WriteRequest{
@@ -295,6 +300,7 @@ func TestLeader_Reconcile_ReapMember(t *testing.T) {
 }
 
 func TestLeader_Reconcile(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServerWithConfig(t, func(c *Config) {
 		c.ACLDatacenter = "dc1"
 		c.ACLMasterToken = "root"
@@ -334,6 +340,7 @@ func TestLeader_Reconcile(t *testing.T) {
 }
 
 func TestLeader_Reconcile_Races(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServer(t)
 	defer os.RemoveAll(dir1)
 	defer s1.Shutdown()
@@ -371,8 +378,8 @@ func TestLeader_Reconcile_Races(t *testing.T) {
 		NodeMeta:   map[string]string{"hello": "world"},
 		Check: &structs.HealthCheck{
 			Node:    c1.config.NodeName,
-			CheckID: SerfCheckID,
-			Name:    SerfCheckName,
+			CheckID: structs.SerfCheckID,
+			Name:    structs.SerfCheckName,
 			Status:  api.HealthCritical,
 			Output:  "",
 		},
@@ -423,6 +430,7 @@ func TestLeader_Reconcile_Races(t *testing.T) {
 }
 
 func TestLeader_LeftServer(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServer(t)
 	defer os.RemoveAll(dir1)
 	defer s1.Shutdown()
@@ -457,9 +465,11 @@ func TestLeader_LeftServer(t *testing.T) {
 	for _, s := range servers[1:] {
 		retry.Run(t, func(r *retry.R) { r.Check(wantPeers(s, 2)) })
 	}
+	s1.Shutdown()
 }
 
 func TestLeader_LeftLeader(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServer(t)
 	defer os.RemoveAll(dir1)
 	defer s1.Shutdown()
@@ -525,6 +535,7 @@ func TestLeader_LeftLeader(t *testing.T) {
 }
 
 func TestLeader_MultiBootstrap(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServer(t)
 	defer os.RemoveAll(dir1)
 	defer s1.Shutdown()
@@ -556,6 +567,7 @@ func TestLeader_MultiBootstrap(t *testing.T) {
 }
 
 func TestLeader_TombstoneGC_Reset(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServer(t)
 	defer os.RemoveAll(dir1)
 	defer s1.Shutdown()
@@ -617,6 +629,7 @@ func TestLeader_TombstoneGC_Reset(t *testing.T) {
 }
 
 func TestLeader_ReapTombstones(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServerWithConfig(t, func(c *Config) {
 		c.ACLDatacenter = "dc1"
 		c.ACLMasterToken = "root"
@@ -686,6 +699,7 @@ func TestLeader_ReapTombstones(t *testing.T) {
 }
 
 func TestLeader_RollRaftServer(t *testing.T) {
+	t.Parallel()
 	dir1, s1 := testServerWithConfig(t, func(c *Config) {
 		c.Bootstrap = true
 		c.Datacenter = "dc1"
@@ -768,6 +782,7 @@ func TestLeader_RollRaftServer(t *testing.T) {
 }
 
 func TestLeader_ChangeServerID(t *testing.T) {
+	t.Parallel()
 	conf := func(c *Config) {
 		c.Bootstrap = false
 		c.BootstrapExpect = 3

@@ -4,7 +4,10 @@ GOTOOLS = \
 	github.com/jteeuwen/go-bindata/... \
 	github.com/mitchellh/gox \
 	golang.org/x/tools/cmd/cover \
-	golang.org/x/tools/cmd/stringer
+	golang.org/x/tools/cmd/stringer \
+	github.com/axw/gocov/gocov \
+	gopkg.in/matm/v1/gocov-html
+
 GOTAGS ?= consul
 GOFILES ?= $(shell go list ./... | grep -v /vendor/)
 GOOS=$(shell go env GOOS)
@@ -33,7 +36,7 @@ dev:
 	cp $(GOPATH)/bin/consul bin/
 	cp $(GOPATH)/bin/consul pkg/$(GOOS)_$(GOARCH)
 
-# linux builds a linux package indpendent of the source platform
+# linux builds a linux package independent of the source platform
 linux:
 	mkdir -p pkg/linux_amd64/
 	GOOS=linux GOARCH=amd64 go build -ldflags '$(GOLDFLAGS)' -tags '$(GOTAGS)' -o pkg/linux_amd64/consul
@@ -46,17 +49,21 @@ cov:
 	gocov test $(GOFILES) | gocov-html > /tmp/coverage.html
 	open /tmp/coverage.html
 
-test: dev
-	go test -tags "$(GOTAGS)" -i ./...
-	go test -tags "$(GOTAGS)" -run '^$$' ./... > /dev/null
-	go test -tags "$(GOTAGS)" -v $$(go list ./... | egrep -v '(agent/consul|vendor)') > test.log 2>&1 || echo 'FAIL_TOKEN' >> test.log
-	go test -tags "$(GOTAGS)" -v $$(go list ./... | egrep '(agent/consul)') >> test.log 2>&1 || echo 'FAIL_TOKEN' >> test.log
-	@if [ "$$TRAVIS" == "true" ] ; then cat test.log ; fi
-	@if grep -q 'FAIL_TOKEN' test.log ; then grep 'FAIL:' test.log ; exit 1 ; else echo 'PASS' ; fi
+test: dev vet
+	go test -tags '$(GOTAGS)' -i ./...
+	go test $(GOTEST_FLAGS) -tags '$(GOTAGS)' -timeout 7m -v ./... 2>&1 >test$(GOTEST_FLAGS).log ; echo $$? > exit-code
+	@echo "Exit code: `cat exit-code`" >> test$(GOTEST_FLAGS).log
+	@echo "----"
+	@grep -A5 'DATA RACE' test.log || true
+	@grep -A10 'panic: test timed out' test.log || true
+	@grep '^PASS' test.log | uniq || true
+	@grep -A1 -- '--- FAIL:' test.log || true
+	@grep '^FAIL' test.log || true
+	@test "$$TRAVIS" == "true" && cat test.log || true
+	@exit $$(cat exit-code)
 
-test-race: dev
-	go test -tags "$(GOTAGS)" -i -run '^$$' ./...
-	( set -o pipefail ; go test -race -tags "$(GOTAGS)" -v ./... 2>&1 | tee test-race.log )
+test-race:
+	$(MAKE) GOTEST_FLAGS=-race
 
 cover:
 	go test $(GOFILES) --cover

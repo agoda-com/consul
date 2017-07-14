@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/consul/logger"
 	"github.com/hashicorp/consul/testutil/retry"
 	"github.com/hashicorp/consul/types"
+	"github.com/hashicorp/consul/watch"
 	"github.com/hashicorp/serf/serf"
 )
 
@@ -56,7 +57,7 @@ func TestAgent_Services(t *testing.T) {
 		t.Fatalf("Err: %v", err)
 	}
 	val := obj.(map[string]*structs.NodeService)
-	if len(val) != 2 {
+	if len(val) != 1 {
 		t.Fatalf("bad services: %v", obj)
 	}
 	if val["mysql"].Port != 5000 {
@@ -68,6 +69,14 @@ func TestAgent_Services_ACLFilter(t *testing.T) {
 	t.Parallel()
 	a := NewTestAgent(t.Name(), TestACLConfig())
 	defer a.Shutdown()
+
+	srv1 := &structs.NodeService{
+		ID:      "mysql",
+		Service: "mysql",
+		Tags:    []string{"master"},
+		Port:    5000,
+	}
+	a.state.AddService(srv1, "")
 
 	t.Run("no token", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/v1/agent/services", nil)
@@ -237,6 +246,19 @@ func TestAgent_Reload(t *testing.T) {
 	cfg.Services = []*structs.ServiceDefinition{
 		&structs.ServiceDefinition{Name: "redis"},
 	}
+
+	params := map[string]interface{}{
+		"datacenter": "dc1",
+		"type":       "key",
+		"key":        "test",
+		"handler":    "true",
+	}
+	wp, err := watch.ParseExempt(params, []string{"handler"})
+	if err != nil {
+		t.Fatalf("Expected watch.Parse to succeed %v", err)
+	}
+	cfg.WatchPlans = append(cfg.WatchPlans, wp)
+
 	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
 
@@ -250,15 +272,17 @@ func TestAgent_Reload(t *testing.T) {
 		&structs.ServiceDefinition{Name: "redis-reloaded"},
 	}
 
-	ok, err := a.ReloadConfig(cfg2)
-	if err != nil {
+	if err := a.ReloadConfig(cfg2); err != nil {
 		t.Fatalf("got error %v want nil", err)
-	}
-	if !ok {
-		t.Fatalf("got ok %v want true")
 	}
 	if _, ok := a.state.services["redis-reloaded"]; !ok {
 		t.Fatalf("missing redis-reloaded service")
+	}
+
+	for _, wp := range cfg.WatchPlans {
+		if !wp.IsStopped() {
+			t.Fatalf("Reloading configs should stop watch plans of the previous configuration")
+		}
 	}
 }
 

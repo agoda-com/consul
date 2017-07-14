@@ -4,22 +4,53 @@ BREAKING CHANGES:
 
 FEATURES:
 
+* agent: Added a new [`block_endpoints`](https://www.consul.io/docs/agent/options.html#block_endpoints) configuration option that allows blocking HTTP endpoints by prefix. This allows operators to completely disallow access to specific endpoints on a given agent. [GH-3252]
+
+IMPROVEMENTS:
+
+* agent: (Consul Enterprise) Snapshot agent rotation uses S3's pagination API, enabling retaining more than a 100 snapshots.
+* agent: Removed registration of the `consul` service from the agent since it's already handled by the leader. This means that Consul servers no longer need to have an `acl_agent_token` with write access to the `consul` service if ACLs are enabled. [GH-3248]
+* api: Added the ability to pass in a `context` as part of the `QueryOptions` during a request. This provides a way to cancel outstanding blocking queries. [GH-3195]
+* docs: Added a complete end-to-end example of ACL bootstrapping in the [ACL Guide]https://www.consul.io/docs/guides/acl.html#bootstrapping-acls). [GH-3248]
+* vendor: Updated golang.org/x/sys/unix to support IBM s390 platforms. [GH-3240]
+
+BUG FIXES:
+
+* agent: Fixed an issue where watch plans would take up to 10 minutes to close their connections and give up their file descriptors after reloading Consul. [GH-3018]
+* agent: (Consul Enterprise) Fixed an issue with the snapshot agent where it could get stuck trying to obtain the leader lock after an extended server outage.
+* agent: Fixed HTTP health checks to allow them to set the `Host` header correctly on outgoing requests. [GH-3203]
+* agent: Serf snapshots can now auto recover from disk write errors without needing a restart. [GH-1744]
+* server: Updated the Raft library to pull in a fix where servers that are very far behind in replication can get stuck in a loop trying to install snapshots. [GH-3201]
+* server: Fixed a rare but serious deadlock where the Consul leader routine could get stuck with the Raft internal leader routine while waiting for the initial barrier after a leader election. [GH-3230]
+* server: Added automatic cleanup of failed Raft snapshots. [GH-3258]
+* ui: Provided a path to reset the ACL token when the current token is invalid. Previously, the UI would get stuck on the error page and it wasn't possible to get back to the settings. [GH-2370]
+* ui: Removed an extra fetch of the nodes resource when loading the UI. [GH-3245]
+* ui: Changed default ACL token type to "client" when creating ACLs. [GH-3246]
+* ui: Display a 404 error instead of a 200 when trying to load a nonexistent node. [GH-3251]
+
+## 0.8.5 (June 27, 2017)
+
+BREAKING CHANGES:
+
+* agent: Parse values given to `?passing` for health endpoints. Previously Consul only checked for the existence of the querystring, not the value. That means using `?passing=false` would actually still include passing values. Consul now parses the value given to passing as a boolean. If no value is provided, the old behavior remains. This may be a breaking change for some users, but the old experience was incorrect and caused enough confusion to warrant changing it. [GH-2212, GH-3136]
+* agent: The default value of [`-disable-host-node-id`](https://www.consul.io/docs/agent/options.html#_disable_host_node_id) has been changed from false to true. This means you need to opt-in to host-based node IDs and by default Consul will generate a random node ID. A high number of users struggled to deploy newer versions of Consul with host-based IDs because of various edge cases of how the host IDs work in Docker, on specially-provisioned machines, etc. so changing this from opt-out to opt-in will ease operations for many Consul users. [GH-3171]
+
 IMPROVEMENTS:
 
 * agent: Added a `-disable-keyring-file` option to prevent writing keyring data to disk. [GH-3145]
 * agent: Added automatic notify to systemd on Linux after LAN join is complete, which makes it easier to order services that depend on Consul being available. [GH-2121]
-* agent: Added a new agent-level configuration option to default all HTTP requests to `?stale` mode. [GH-3142]
+* agent: The `http_api_response_headers` config has been moved into a new `http_config` struct, so the old form is still supported but is deprecated. [GH-3142]
 * dns: Added support for EDNS(0) size adjustments if set in the request frame. This allows DNS responses via UDP which are larger than the standard 512 bytes max if the requesting client can support it. [GH-1980, GH-3131]
 * server: Added a startup warning for servers when expecting to bootstrap with an even number of nodes. [GH-1282]
 * agent: (Consul Enterprise) Added support for non rotating, statically named snapshots for S3 snapshots using the snapshot agent.
 
 BUG FIXES:
 
-* agent: Parse values given to `?passing` for health endpoints. Previously Consul only checked for the existence of the querystring, not the value. That means using `?passing=false` would actually still include passing values. Consul 0.9 now parses the value given to passing as a boolean. If no value is provided, the old behavior remains. **This may be a breaking change for some users**, but the old experience was incorrect and caused enough confusion to warrant changing it. [GH-2212, GH-3136]
 * agent: Fixed a regression where configuring -1 for the port was no longer disabling the DNS server. [GH-3135]
 * agent: Fix `consul leave` shutdown race. When shutting down an agent via the `consul leave` command on the command line the output would be `EOF` instead of `Graceful leave completed` [GH-2880]
 * agent: Show a better error message than 'EOF' when attempting to join with the wrong gossip key. [GH-1013]
 * agent: Fixed an issue where the `Method` and `Header` features of HTTP health checks were not being applied. [GH-3178]
+* agent: Fixed an issue where internally-configured watches were not working because of an incorrect protocol error, and unified internal watch handling during reloads of the Consul agent. [GH-3177]
 * server: Fixed an issue where the leader could return stale data duing queries as it is starting up. [GH-2644]
 
 ## 0.8.4 (June 9, 2017)
