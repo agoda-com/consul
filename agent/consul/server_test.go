@@ -11,7 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/consul/agent/consul/agent"
+	"github.com/hashicorp/consul/agent/metadata"
+	"github.com/hashicorp/consul/agent/token"
 	"github.com/hashicorp/consul/testrpc"
 	"github.com/hashicorp/consul/testutil"
 	"github.com/hashicorp/consul/testutil/retry"
@@ -146,7 +147,7 @@ func newServer(c *Config) (*Server, error) {
 		w = os.Stderr
 	}
 	logger := log.New(w, c.NodeName+" - ", log.LstdFlags|log.Lmicroseconds)
-	srv, err := NewServerLogger(c, logger)
+	srv, err := NewServerLogger(c, logger, new(token.Store))
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +342,7 @@ func TestServer_JoinSeparateLanAndWanAddresses(t *testing.T) {
 		if len(s2.router.GetDatacenters()) != 2 {
 			r.Fatalf("remote consul missing")
 		}
-		if len(s2.localConsuls) != 2 {
+		if len(s2.serverLookup.Servers()) != 2 {
 			r.Fatalf("local consul fellow s3 for s2 missing")
 		}
 	})
@@ -665,14 +666,12 @@ func testVerifyRPC(s1, s2 *Server, t *testing.T) (bool, error) {
 	retry.Run(t, func(r *retry.R) { r.Check(wantPeers(s2, 2)) })
 
 	// Have s2 make an RPC call to s1
-	s2.localLock.RLock()
-	var leader *agent.Server
-	for _, server := range s2.localConsuls {
+	var leader *metadata.Server
+	for _, server := range s2.serverLookup.Servers() {
 		if server.Name == s1.config.NodeName {
 			leader = server
 		}
 	}
-	s2.localLock.RUnlock()
 	if leader == nil {
 		t.Fatal("no leader")
 	}
