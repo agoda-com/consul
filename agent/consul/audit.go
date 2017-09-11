@@ -10,7 +10,7 @@ import (
 	// used mssql driver
 	_ "github.com/denisenkom/go-mssqldb"
 
-	"github.com/hashicorp/consul/agent/consul/structs"
+	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 )
 
