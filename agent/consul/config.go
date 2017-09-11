@@ -66,6 +66,9 @@ type Config struct {
 	// DataDir is the directory to store our state in
 	DataDir string
 
+	// DBConfig is the configuration used for the auditing of KV updates
+	DBConfig *structs.DBConfig
+
 	// DevMode is used to enable a development server mode.
 	DevMode bool
 
@@ -390,6 +393,10 @@ func DefaultConfig() *Config {
 		RPCHoldTimeout: 7 * time.Second,
 
 		TLSMinVersion: "tls10",
+
+		DBConfig: &structs.DBConfig{
+			Port: 1433,
+		},
 
 		AutopilotConfig: &structs.AutopilotConfig{
 			CleanupDeadServers:      true,

@@ -32,6 +32,15 @@ type RaftIndex struct {
 	ModifyIndex uint64
 }
 
+type DBConfig struct {
+	Username string
+	Password string
+	Port     int
+	Host     string
+	Server   string
+	Database string
+}
+
 const (
 	RegisterRequestType MessageType = iota
 	DeregisterRequestType

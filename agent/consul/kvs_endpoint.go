@@ -92,6 +92,15 @@ func (k *KVS) Apply(args *structs.KVSRequest, reply *bool) error {
 		return nil
 	}
 
+	// if no database options are set, we don't want to write into one
+	if k.srv.config.DBConfig.Database != "" {
+		// Lets log what, when and who changed a KV
+		err := k.srv.LogKVChange(args)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Apply the update.
 	resp, err := k.srv.raftApply(structs.KVSRequestType, args)
 	if err != nil {

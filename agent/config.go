@@ -295,6 +295,15 @@ type Telemetry struct {
 	CirconusBrokerSelectTag string `mapstructure:"circonus_broker_select_tag"`
 }
 
+type DB struct {
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+	Port     int    `mapstructure:"port"`
+	Host     string `mapstructure:"host"`
+	Server   string `mapstructure:"server"`
+	Database string `mapstructure:"database"`
+}
+
 // Autopilot is used to configure helpful features for operating Consul servers.
 type Autopilot struct {
 	// CleanupDeadServers enables the automatic cleanup of dead servers when new ones
@@ -476,6 +485,8 @@ type Config struct {
 	Autopilot Autopilot `mapstructure:"autopilot"`
 
 	Telemetry Telemetry `mapstructure:"telemetry"`
+
+	DB DB `mapstructure:"db"`
 
 	// Protocol is the Consul protocol version to use.
 	Protocol int `mapstructure:"protocol"`
@@ -1743,6 +1754,24 @@ func MergeConfig(a, b *Config) *Config {
 	}
 	if b.Telemetry.CirconusBrokerSelectTag != "" {
 		result.Telemetry.CirconusBrokerSelectTag = b.Telemetry.CirconusBrokerSelectTag
+	}
+	if b.DB.Database != "" {
+		result.DB.Database = b.DB.Database
+	}
+	if b.DB.Host != "" {
+		result.DB.Host = b.DB.Host
+	}
+	if b.DB.Password != "" {
+		result.DB.Password = b.DB.Password
+	}
+	if b.DB.Port > 0 {
+		result.DB.Port = b.DB.Port
+	}
+	if b.DB.Server != "" {
+		result.DB.Server = b.DB.Server
+	}
+	if b.DB.Username != "" {
+		result.DB.Username = b.DB.Username
 	}
 	if b.EnableDebug {
 		result.EnableDebug = true

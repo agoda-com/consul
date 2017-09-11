@@ -292,6 +292,7 @@ func (a *Agent) Start() error {
 	a.state = NewLocalState(c, a.logger)
 
 	// create the config for the rpc server/client
+
 	consulCfg, err := a.consulConfig()
 	if err != nil {
 		return err
@@ -746,6 +747,26 @@ func (a *Agent) consulConfig() (*consul.Config, error) {
 	}
 	if a.config.Autopilot.DisableUpgradeMigration != nil {
 		base.AutopilotConfig.DisableUpgradeMigration = *a.config.Autopilot.DisableUpgradeMigration
+	}
+
+	// Database configuration
+	if a.config.DB.Database != "" {
+		base.DBConfig.Database = a.config.DB.Database
+	}
+	if a.config.DB.Host != "" {
+		base.DBConfig.Host = a.config.DB.Host
+	}
+	if a.config.DB.Password != "" {
+		base.DBConfig.Password = a.config.DB.Password
+	}
+	if a.config.DB.Port != 0 {
+		base.DBConfig.Port = a.config.DB.Port
+	}
+	if a.config.DB.Server != "" {
+		base.DBConfig.Server = a.config.DB.Server
+	}
+	if a.config.DB.Username != "" {
+		base.DBConfig.Username = a.config.DB.Username
 	}
 
 	// make sure the advertise address is always set

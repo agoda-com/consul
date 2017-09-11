@@ -395,6 +395,11 @@ func NewServerLogger(config *Config, logger *log.Logger) (*Server, error) {
 		go s.runACLReplication()
 	}
 
+	// Open DB con
+	if s.IsAuditorEnabled() {
+		go s.OpenAuditor(config.DBConfig)
+	}
+
 	// Start listening for RPC requests.
 	go s.listen()
 
@@ -713,6 +718,10 @@ func (s *Server) Shutdown() error {
 
 	s.shutdown = true
 	close(s.shutdownCh)
+
+	if s.IsAuditorEnabled() {
+		s.CloseAuditor()
+	}
 
 	if s.serfLAN != nil {
 		s.serfLAN.Shutdown()
