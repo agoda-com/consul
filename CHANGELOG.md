@@ -8,6 +8,11 @@ IMPROVEMENTS:
 
 BUG FIXES:
 
+## 0.9.3-AGODA (September 12, 2017)
+
+FEATURES:
+* **Auditor:** Consul server audit KV modifications (put/delet/deletetree) into a MSSQL DB and versions the value.
+
 ## 0.9.3 (September 8, 2017)
 
 FEATURES:
