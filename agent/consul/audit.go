@@ -72,7 +72,7 @@ func changeKV(args *structs.KVSRequest) (int, error) {
 		return -1, err
 	}
 
-	insert, err := db.Prepare("insert into kv (timestamp, createIndex, flags, kvkey, lockindex, modifyindex, session, kvvalue, version, datacenter, acl) values (?,?,?,?,?,?,?,?,?,?,?)")
+	insert, err := db.Prepare("insert into kv (timestamp, createIndex, flags, kvkey, lockindex, modifyindex, session, kvvalue, regex, version, datacenter, acl) values (?,?,?,?,?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return -1, err
 	}
@@ -85,6 +85,7 @@ func changeKV(args *structs.KVSRequest) (int, error) {
 		args.DirEnt.ModifyIndex,
 		args.DirEnt.Session,
 		args.DirEnt.Value,
+		args.DirEnt.RegEx,
 		version,
 		args.Datacenter,
 		args.Token)

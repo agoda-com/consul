@@ -198,8 +198,8 @@ func (s *HTTPServer) KVSPut(resp http.ResponseWriter, req *http.Request, args *s
 
 	var dat structs.ValValid
 	if err := json.Unmarshal(buf.Bytes(), &dat); err != nil {
-		// This seems to be an old key without not in JSON with the
-		// corresponding RegEx. Lets parse it as key.
+		// This seems to be an old value without not in JSON with the
+		// corresponding RegEx. Lets parse it as value.
 		dat.Value = buf.String()
 		dat.RegEx = ""
 	}

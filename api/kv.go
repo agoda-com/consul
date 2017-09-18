@@ -16,7 +16,7 @@ type KVPair struct {
 	// via the API.
 	Key string
 
-	// RegEx is the pattern which the Key has to match
+	// RegEx is the pattern which the Value has to match
 	RegEx string
 
 	// CreateIndex holds the index corresponding the creation of this KVPair. This
@@ -199,13 +199,13 @@ func (k *KV) Put(p *KVPair, q *WriteOptions) (*WriteMeta, error) {
 		params["flags"] = strconv.FormatUint(p.Flags, 10)
 	}
 
-	// Combine the value with its regEx
-	var b KVBundle
-	b.Value = p.Value
-	b.RegEx = p.RegEx
+	// Combine the value with its RegEx
+	var kvbundle KVBundle
+	kvbundle.Value = p.Value
+	kvbundle.RegEx = p.RegEx
 
 	var val bytes.Buffer
-	binary.Write(&val, binary.BigEndian, b)
+	binary.Write(&val, binary.BigEndian, kvbundle)
 
 	_, wm, err := k.put(p.Key, params, val.Bytes(), q)
 	return wm, err
