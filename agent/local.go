@@ -9,7 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hashicorp/consul/agent/consul/structs"
+	"github.com/hashicorp/consul/acl"
+	"github.com/hashicorp/consul/agent/structs"
+	"github.com/hashicorp/consul/agent/token"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/lib"
 	"github.com/hashicorp/consul/types"
@@ -30,7 +32,6 @@ type syncStatus struct {
 // populated during NewLocalAgent from the agent configuration to avoid
 // race conditions with the agent configuration.
 type localStateConfig struct {
-	ACLToken            string
 	AEInterval          time.Duration
 	AdvertiseAddr       string
 	CheckUpdateInterval time.Duration
@@ -38,7 +39,7 @@ type localStateConfig struct {
 	NodeID              types.NodeID
 	NodeName            string
 	TaggedAddresses     map[string]string
-	TokenForAgent       string
+	Tokens              *token.Store
 }
 
 // localState is used to represent the node's services,
@@ -89,9 +90,8 @@ type localState struct {
 }
 
 // NewLocalState creates a  is used to initialize the local state
-func NewLocalState(c *Config, lg *log.Logger) *localState {
+func NewLocalState(c *Config, lg *log.Logger, tokens *token.Store) *localState {
 	lc := localStateConfig{
-		ACLToken:            c.ACLToken,
 		AEInterval:          c.AEInterval,
 		AdvertiseAddr:       c.AdvertiseAddr,
 		CheckUpdateInterval: c.CheckUpdateInterval,
@@ -99,7 +99,7 @@ func NewLocalState(c *Config, lg *log.Logger) *localState {
 		NodeID:              c.NodeID,
 		NodeName:            c.NodeName,
 		TaggedAddresses:     map[string]string{},
-		TokenForAgent:       c.GetTokenForAgent(),
+		Tokens:              tokens,
 	}
 	for k, v := range c.TaggedAddresses {
 		lc.TaggedAddresses[k] = v
@@ -172,7 +172,7 @@ func (l *localState) ServiceToken(id string) string {
 func (l *localState) serviceToken(id string) string {
 	token := l.serviceTokens[id]
 	if token == "" {
-		token = l.config.ACLToken
+		token = l.config.Tokens.UserToken()
 	}
 	return token
 }
@@ -239,7 +239,7 @@ func (l *localState) CheckToken(checkID types.CheckID) string {
 func (l *localState) checkToken(checkID types.CheckID) string {
 	token := l.checkTokens[checkID]
 	if token == "" {
-		token = l.config.ACLToken
+		token = l.config.Tokens.UserToken()
 	}
 	return token
 }
@@ -247,18 +247,25 @@ func (l *localState) checkToken(checkID types.CheckID) string {
 // AddCheck is used to add a health check to the local state.
 // This entry is persistent and the agent will make a best effort to
 // ensure it is registered
-func (l *localState) AddCheck(check *structs.HealthCheck, token string) {
+func (l *localState) AddCheck(check *structs.HealthCheck, token string) error {
 	// Set the node name
 	check.Node = l.config.NodeName
 
 	l.Lock()
 	defer l.Unlock()
 
+	// if there is a serviceID associated with the check, make sure it exists before adding it
+	// NOTE - This logic may be moved to be handled within the Agent's Addcheck method after a refactor
+	if check.ServiceID != "" && l.services[check.ServiceID] == nil {
+		return fmt.Errorf("ServiceID %q does not exist", check.ServiceID)
+	}
+
 	l.checks[check.CheckID] = check
 	l.checkStatus[check.CheckID] = syncStatus{}
 	l.checkTokens[check.CheckID] = token
 	delete(l.checkCriticalTime, check.CheckID)
 	l.changeMade()
+	return nil
 }
 
 // RemoveCheck is used to remove a health check from the local state.
@@ -442,7 +449,7 @@ func (l *localState) setSyncState() error {
 	req := structs.NodeSpecificRequest{
 		Datacenter:   l.config.Datacenter,
 		Node:         l.config.NodeName,
-		QueryOptions: structs.QueryOptions{Token: l.config.TokenForAgent},
+		QueryOptions: structs.QueryOptions{Token: l.config.Tokens.AgentToken()},
 	}
 	var out1 structs.IndexedNodeServices
 	var out2 structs.IndexedHealthChecks
@@ -640,7 +647,7 @@ func (l *localState) deleteService(id string) error {
 		delete(l.serviceTokens, id)
 		l.logger.Printf("[INFO] agent: Deregistered service '%s'", id)
 		return nil
-	} else if strings.Contains(err.Error(), permissionDenied) {
+	} else if acl.IsErrPermissionDenied(err) {
 		l.serviceStatus[id] = syncStatus{inSync: true}
 		l.logger.Printf("[WARN] agent: Service '%s' deregistration blocked by ACLs", id)
 		return nil
@@ -667,7 +674,7 @@ func (l *localState) deleteCheck(id types.CheckID) error {
 		delete(l.checkTokens, id)
 		l.logger.Printf("[INFO] agent: Deregistered check '%s'", id)
 		return nil
-	} else if strings.Contains(err.Error(), permissionDenied) {
+	} else if acl.IsErrPermissionDenied(err) {
 		l.checkStatus[id] = syncStatus{inSync: true}
 		l.logger.Printf("[WARN] agent: Check '%s' deregistration blocked by ACLs", id)
 		return nil
@@ -721,7 +728,7 @@ func (l *localState) syncService(id string) error {
 		for _, check := range checks {
 			l.checkStatus[check.CheckID] = syncStatus{inSync: true}
 		}
-	} else if strings.Contains(err.Error(), permissionDenied) {
+	} else if acl.IsErrPermissionDenied(err) {
 		l.serviceStatus[id] = syncStatus{inSync: true}
 		l.logger.Printf("[WARN] agent: Service '%s' registration blocked by ACLs", id)
 		for _, check := range checks {
@@ -762,7 +769,7 @@ func (l *localState) syncCheck(id types.CheckID) error {
 		// every time we sync a check.
 		l.nodeInfoInSync = true
 		l.logger.Printf("[INFO] agent: Synced check '%s'", id)
-	} else if strings.Contains(err.Error(), permissionDenied) {
+	} else if acl.IsErrPermissionDenied(err) {
 		l.checkStatus[id] = syncStatus{inSync: true}
 		l.logger.Printf("[WARN] agent: Check '%s' registration blocked by ACLs", id)
 		return nil
@@ -778,14 +785,14 @@ func (l *localState) syncNodeInfo() error {
 		Address:         l.config.AdvertiseAddr,
 		TaggedAddresses: l.config.TaggedAddresses,
 		NodeMeta:        l.metadata,
-		WriteRequest:    structs.WriteRequest{Token: l.config.TokenForAgent},
+		WriteRequest:    structs.WriteRequest{Token: l.config.Tokens.AgentToken()},
 	}
 	var out struct{}
 	err := l.delegate.RPC("Catalog.Register", &req, &out)
 	if err == nil {
 		l.nodeInfoInSync = true
 		l.logger.Printf("[INFO] agent: Synced node info")
-	} else if strings.Contains(err.Error(), permissionDenied) {
+	} else if acl.IsErrPermissionDenied(err) {
 		l.nodeInfoInSync = true
 		l.logger.Printf("[WARN] agent: Node info update blocked by ACLs")
 		return nil

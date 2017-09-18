@@ -31,9 +31,9 @@ The type is either "client" (meaning the token cannot modify ACL rules) or "mana
 (meaning the token is allowed to perform all actions).
 
 The token ID is passed along with each RPC request to the servers. Consul's
-[HTTP endpoints](http://localhost:4567/api/index.html) can accept tokens via the `token`
+[HTTP endpoints](/api/index.html) can accept tokens via the `token`
 query string parameter, or the `X-Consul-Token` request header. Consul's
-[CLI commands](http://localhost:4567/docs/commands/index.html) can accept tokens via the
+[CLI commands](/docs/commands/index.html) can accept tokens via the
 `token` argument, or the `CONSUL_HTTP_TOKEN` environment variable.
 
 If no token is provided, the rules associated with a special, configurable anonymous
@@ -107,7 +107,7 @@ This configuration also allows the ACL system to fail open or closed.
 [ACL replication](#replication) is also available to allow for the full set of ACL
 tokens to be replicated for use during an outage.
 
-#### Configuring ACLs
+## Configuring ACLs
 
 ACLs are configured using several different configuration options. These are marked
 as to whether they are set on servers, clients, or both.
@@ -128,23 +128,69 @@ system, or accessing Consul in special situations:
 
 | Special Token | Servers | Clients | Purpose |
 | ------------- | ------- | ------- | ------- |
-| [`acl_agent_master_token`](/docs/agent/options.html#acl_agent_master_token) | `OPTIONAL` | `OPTIONAL` | Special token that can be used to access [Agent API](/api/agent.html) when the ACL datacenter isn't available, or servers are offline (for clients); used for setting up the cluster such as doing initial join operations |
-| [`acl_agent_token`](/docs/agent/options.html#acl_agent_token) | `OPTIONAL` | `OPTIONAL` | Special token that is used for an agent's internal operations with the [Catalog API](/api/catalog.html); this needs to have at least `node` policy access so the agent can self update its registration information, and also needs `service` read access for all services that will be registered with that node for [anti-entropy](/docs/internals/anti-entropy.html) syncing |
-| [`acl_master_token`](/docs/agent/options.html#acl_master_token) | `REQUIRED` | `N/A` | Special token used to bootstrap the ACL system, see details below |
+| [`acl_agent_master_token`](/docs/agent/options.html#acl_agent_master_token) | `OPTIONAL` | `OPTIONAL` | Special token that can be used to access [Agent API](/api/agent.html) when the ACL datacenter isn't available, or servers are offline (for clients); used for setting up the cluster such as doing initial join operations, see the [ACL Agent Master Token](#acl-agent-master-token) section for more details |
+| [`acl_agent_token`](/docs/agent/options.html#acl_agent_token) | `OPTIONAL` | `OPTIONAL` | Special token that is used for an agent's internal operations, see the [ACL Agent Token](#acl-agent-token) section for more details |
+| [`acl_master_token`](/docs/agent/options.html#acl_master_token) | `REQUIRED` | `N/A` | Special token used to bootstrap the ACL system, see the [Bootstrapping ACLs](#bootstrapping-acls) section for more details |
 | [`acl_token`](/docs/agent/options.html#acl_token) | `OPTIONAL` | `OPTIONAL` | Default token to use for client requests where no token is supplied; this is often configured with read-only access to services to enable DNS service discovery on agents |
 
-#### Bootstrapping ACLs
+In Consul 0.9.1 and later, the agent ACL tokens can be introduced or updated via the
+[/v1/agent/token API](/api/agent.html#update-acl-tokens).
 
-Bootstrapping ACLs on a new cluster requires a few steps, outlined in the example in this
+#### ACL Agent Master Token
+
+Since the [`acl_agent_master_token`](/docs/agent/options.html#acl_agent_master_token) is designed to be used when the Consul servers are not available, its policy is managed locally on the agent and does not need to have a token defined on the Consul servers via the ACL API. Once set, it implicitly has the following policy associated with it (the `node` policy was added in Consul 0.9.0):
+
+```text
+agent "<node name of agent>" {
+  policy = "write"
+}
+node "" {
+  policy = "read"
+}
+```
+
+In Consul 0.9.1 and later, the agent ACL tokens can be introduced or updated via the
+[/v1/agent/token API](/api/agent.html#update-acl-tokens).
+
+#### ACL Agent Token
+
+The [`acl_agent_token`](/docs/agent/options.html#acl_agent_token) is a special token that is used for an agent's internal operations. It isn't used directly for any user-initiated operations like the [`acl_token`](/docs/agent/options.html#acl_token), though if the `acl_agent_token` isn't configured the `acl_token` will be used. The ACL agent token is used for the following operations by the agent:
+
+1. Updating the agent's node entry using the [Catalog API](/api/catalog.html), including updating its node metadata, tagged addresses, and network coordinates
+2. Performing [anti-entropy](/docs/internals/anti-entropy.html) syncing, in particular reading the node metadata and services registered with the catalog
+3. Reading and writing the special `_rexec` section of the KV store when executing [`consul exec`](/docs/commands/exec.html) commands
+
+Here's an example policy sufficient to accomplish the above for a node called `mynode`:
+
+```text
+node "mynode" {
+  policy = "write"
+}
+service "" {
+  policy = "read"
+}
+key "_rexec" {
+  policy = "write"
+}
+```
+
+The `service` policy needs `read` access for any services that can be registered on the agent. If [remote exec is disabled](/docs/agent/options.html#disable_remote_exec), the default, then the `key` policy can be omitted.
+
+In Consul 0.9.1 and later, the agent ACL tokens can be introduced or updated via the
+[/v1/agent/token API](/api/agent.html#update-acl-tokens).
+
+## Bootstrapping ACLs
+
+Bootstrapping ACLs on a new cluster requires a few steps, outlined in the examples in this
 section.
 
-**Enable ACLs on the Consul Servers**
+#### Enable ACLs on the Consul Servers
 
 The first step for bootstrapping ACLs is to enable ACLs on the Consul servers in the ACL
 datacenter. In this example, we are configuring the following:
 
 1. An ACL datacenter of "dc1", which is where these servers are
-2. An ACL master token of "b1gs33cr3t"
+2. An ACL master token of "b1gs33cr3t"; see below for an alternative using the [/v1/acl/bootstrap API](/api/acl.html#bootstrap-acls)
 3. A default policy of "deny" which means we are in whitelist mode
 4. A down policy of "extend-cache" which means that we will ignore token TTLs during an
    outage
@@ -172,10 +218,26 @@ a server acquires cluster leadership. If you would like to install or change the
 [`acl_master_token`](/docs/agent/options.html#acl_master_token) in the configuration
 for all servers. Once this is done, restart the current leader to force a leader election.
 
+In Consul 0.9.1 and later, you can use the [/v1/acl/bootstrap API](/api/acl.html#bootstrap-acls)
+to make the initial master token, so a token never needs to be placed into a configuration
+file. To use this approach, omit `acl_master_token` from the above config and then call the API:
+
+```text
+$ curl \
+    --request PUT \
+    http://127.0.0.1:8500/v1/acl/bootstrap
+
+{"ID":"fe3b8d40-0ee0-8783-6cc2-ab1aa9bb16c1"}
+```
+
+The returned token is the initial management token, which is randomly generated by Consul.
+It's only possible to bootstrap one time, and bootstrapping will be disabled if a master
+token was configured and created.
+
 Once the ACL system is bootstrapped, ACL tokens can be managed through the
 [ACL API](/api/acl.html).
 
-**Create an Agent Token**
+#### Create an Agent Token
 
 After the servers are restarted above, you will see new errors in the logs of the Consul
 servers related to permission denied errors:
@@ -191,7 +253,7 @@ own internal operations like updating its node information in the catalog and pe
 [anti-entropy](/docs/internals/anti-entropy.html) syncing. We can create a token using the
 ACL API, and the ACL master token we set in the previous step:
 
-```
+```text
 $ curl \
     --request PUT \
     --header "X-Consul-Token: b1gs33cr3t" \
@@ -218,6 +280,19 @@ configuration and restart the servers once more to apply it:
 }
 ```
 
+In Consul 0.9.1 and later you can also introduce the agent token using an API,
+so it doesn't need to be set in the configuration file:
+
+```text
+$ curl \
+    --request PUT \
+    --header "X-Consul-Token: b1gs33cr3t" \
+    --data \
+'{
+  "Token": "fe3b8d40-0ee0-8783-6cc2-ab1aa9bb16c1"
+}' http://127.0.0.1:8500/v1/agent/token/acl_agent_token
+```
+
 With that ACL agent token set, the servers will be able to sync themselves with the
 catalog:
 
@@ -225,7 +300,9 @@ catalog:
 2017/07/08 23:42:59 [INFO] agent: Synced node info
 ```
 
-**Enable ACLs on the Consul Clients**
+See the [ACL Agent Token](#acl-agent-token) section for more details.
+
+#### Enable ACLs on the Consul Clients
 
 Since ACL enforcement also occurs on the Consul clients, we need to also restart them
 with a configuration file that enables ACLs:
@@ -236,6 +313,19 @@ with a configuration file that enables ACLs:
   "acl_down_policy": "extend-cache",
   "acl_agent_token": "fe3b8d40-0ee0-8783-6cc2-ab1aa9bb16c1"
 }
+```
+
+Similar to the previous example, in Consul 0.9.1 and later you can also introduce the
+agent token using an API, so it doesn't need to be set in the configuration file:
+
+```text
+$ curl \
+    --request PUT \
+    --header "X-Consul-Token: b1gs33cr3t" \
+    --data \
+'{
+  "Token": "fe3b8d40-0ee0-8783-6cc2-ab1aa9bb16c1"
+}' http://127.0.0.1:8500/v1/agent/token/acl_agent_token
 ```
 
 We used the same ACL agent token that we created for the servers, which will work since
@@ -251,7 +341,7 @@ so generally an empty `service` prefix can be used, as shown in the example.
 Clients will report similar permission denied errors until they are restarted with an ACL
 agent token.
 
-**Set an Anonymous Policy (Optional)**
+#### Set an Anonymous Policy (Optional)
 
 At this point ACLs are bootstrapped with ACL agent tokens configured, but there are no
 other policies set up. Even basic operations like `consul members` will be restricted
@@ -280,7 +370,7 @@ configure Consul's behavior when no token is supplied. The anonymous token is ma
 like any other ACL token, except that `anonymous` is used for the ID. In this example
 we will give the anonymous token read privileges for all nodes:
 
-```
+```text
 $ curl \
     --request PUT \
     --header "X-Consul-Token: b1gs33cr3t" \
@@ -333,7 +423,7 @@ consul.                 0       IN      SOA     ns.consul. postmaster.consul. 14
 Now we get an `NXDOMAIN` error because the anonymous token doesn't have access to the
 "consul" service. Let's add that to the anonymous token's policy:
 
-```
+```text
 $ curl \
     --request PUT \
     --header "X-Consul-Token: b1gs33cr3t" \
@@ -374,12 +464,15 @@ consul.service.consul.  0       IN      A       127.0.0.1
 
 The next section shows an alternative to the anonymous token.
 
-**Set Agent-specific Default Tokens (Optional)**
+#### Set Agent-Specific Default Tokens (Optional)
 
 An alternative to the anonymous token is the [`acl_token`](/docs/agent/options.html#acl_token)
 configuration item. When a request is made to a particular Consul agent and no token is
 supplied, the [`acl_token`](/docs/agent/options.html#acl_token) will be used for the token,
 instead of being left empty which would normally invoke the anonymous token.
+
+In Consul 0.9.1 and later, the agent ACL tokens can be introduced or updated via the
+[/v1/agent/token API](/api/agent.html#update-acl-tokens).
 
 This behaves very similarly to the anonymous token, but can be configured differently on each
 agent, if desired. For example, this allows more fine grained control of what DNS requests a
@@ -389,12 +482,16 @@ default.
 If using [`acl_token`](/docs/agent/options.html#acl_token), then it's likely the anonymous
 token will have a more restrictive policy than shown in the examples here.
 
-**Next Steps**
+#### Next Steps
 
 The examples above configure a basic ACL environment with the ability to see all nodes
 by default, and limited access to just the "consul" service. The [ACL API](/api/acl.html)
 can be used to create tokens for applications specific to their intended use, and to create
 more specific ACL agent tokens for each agent's expected role.
+
+Also see [HashiCorp's Vault](https://www.vaultproject.io/docs/secrets/consul/index.html), which
+has an integration with Consul that allows it to generate ACL tokens on the fly and to manage
+their lifetimes.
 
 ## Rule Specification
 
@@ -642,6 +739,10 @@ to use for registration events:
    [checks](/docs/agent/checks.html). Tokens may also be passed to the
    [HTTP API](/api/index.html) for operations that require them.
 
+In addition to ACLs, in Consul 0.9.0 and later, the agent must be configured with
+[`enable_script_checks`](/docs/agent/options.html#_enable_script_checks) set to `true` in order to enable
+script checks.
+
 #### Operator Rules
 
 The `operator` policy controls access to cluster-level operations in the
@@ -824,6 +925,10 @@ to use for registration events:
    [checks](/docs/agent/checks.html). Tokens may also be passed to the
    [HTTP API](/api/index.html) for operations that require them.
 
+In addition to ACLs, in Consul 0.9.0 and later, the agent must be configured with
+[`enable_script_checks`](/docs/agent/options.html#_enable_script_checks) set to `true` in order to enable
+script checks.
+
 #### Session Rules
 
 The `session` policy controls access to [Session API](/api/session.html) operations.
@@ -864,11 +969,17 @@ for any previously resolved tokens and to deny any uncached tokens.
 Consul 0.7 added an ACL Replication capability that can allow non-authoritative
 datacenter agents to resolve even uncached tokens. This is enabled by setting an
 [`acl_replication_token`](/docs/agent/options.html#acl_replication_token) in the
-configuration on the servers in the non-authoritative datacenters. With replication
-enabled, the servers will maintain a replica of the authoritative datacenter's full
-set of ACLs on the non-authoritative servers. The ACL replication token needs to be
-a valid ACL token with management privileges, it can also be the same as the master
-ACL token.
+configuration on the servers in the non-authoritative datacenters. In Consul
+0.9.1 and later you can enable ACL replication using
+[`enable_acl_replication`](/docs/agent/options.html#enable_acl_replication) and
+then set the token later using the
+[agent token API](/api/agent.html#update-acl-tokens) on each server. This can
+also be used to rotate the token without restarting the Consul servers.
+
+With replication enabled, the servers will maintain a replica of the authoritative
+datacenter's full set of ACLs on the non-authoritative servers. The ACL replication
+token needs to be a valid ACL token with management privileges, it can also be the
+same as the master ACL token.
 
 Replication occurs with a background process that looks for new ACLs approximately
 every 30 seconds. Replicated changes are written at a rate that's throttled to
@@ -933,9 +1044,9 @@ Two new configuration options are used once version 8 ACLs are enabled:
 
 * [`acl_agent_master_token`](/docs/agent/options.html#acl_agent_master_token) is used as
   a special access token that has `agent` ACL policy `write` privileges on each agent where
-  it is configured. This token should only be used by operators during outages when Consul
-  servers aren't available to resolve ACL tokens. Applications should use regular ACL
-  tokens during normal operation.
+  it is configured, as well as `node` ACL policy `read` privileges for all nodes. This token
+  should only be used by operators during outages when Consul servers aren't available to
+  resolve ACL tokens. Applications should use regular ACL tokens during normal operation.
 * [`acl_agent_token`](/docs/agent/options.html#acl_agent_token) is used internally by
   Consul agents to perform operations to the service catalog when registering themselves
   or sending network coordinates to the servers. This token must at least have `node` ACL

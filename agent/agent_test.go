@@ -15,19 +15,14 @@ import (
 	"time"
 
 	"github.com/hashicorp/consul/agent/consul"
-	"github.com/hashicorp/consul/agent/consul/structs"
+	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/testutil"
 	"github.com/hashicorp/consul/types"
-	"github.com/hashicorp/consul/version"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/raft"
 	"github.com/pascaldekloe/goe/verify"
 )
-
-func init() {
-	version.Version = "0.8.0"
-}
 
 func externalIP() (string, error) {
 	addrs, err := net.InterfaceAddrs()
@@ -117,6 +112,7 @@ func TestAgent_CheckAdvertiseAddrsSettings(t *testing.T) {
 	cfg.AdvertiseAddrs.SerfLan, _ = net.ResolveTCPAddr("tcp", "127.0.0.42:1233")
 	cfg.AdvertiseAddrs.SerfWan, _ = net.ResolveTCPAddr("tcp", "127.0.0.43:1234")
 	cfg.AdvertiseAddrs.RPC, _ = net.ResolveTCPAddr("tcp", "127.0.0.44:1235")
+	cfg.SetupTaggedAndAdvertiseAddrs()
 	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
 
@@ -146,6 +142,27 @@ func TestAgent_CheckAdvertiseAddrsSettings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(a.Config.TaggedAddresses, expected) {
 		t.Fatalf("Tagged addresses not set up properly: %v", a.Config.TaggedAddresses)
+	}
+}
+
+func TestAgent_TokenStore(t *testing.T) {
+	t.Parallel()
+
+	cfg := TestConfig()
+	cfg.ACLToken = "user"
+	cfg.ACLAgentToken = "agent"
+	cfg.ACLAgentMasterToken = "master"
+	a := NewTestAgent(t.Name(), cfg)
+	defer a.Shutdown()
+
+	if got, want := a.tokens.UserToken(), "user"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if got, want := a.tokens.AgentToken(), "agent"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if got, want := a.tokens.IsAgentMasterToken("master"), true; got != want {
+		t.Fatalf("got %v want %v", got, want)
 	}
 }
 
@@ -628,7 +645,9 @@ func TestAgent_RemoveServiceRemovesAllChecks(t *testing.T) {
 
 func TestAgent_AddCheck(t *testing.T) {
 	t.Parallel()
-	a := NewTestAgent(t.Name(), nil)
+	cfg := TestConfig()
+	cfg.EnableScriptChecks = true
+	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
 
 	health := &structs.HealthCheck{
@@ -665,7 +684,9 @@ func TestAgent_AddCheck(t *testing.T) {
 
 func TestAgent_AddCheck_StartPassing(t *testing.T) {
 	t.Parallel()
-	a := NewTestAgent(t.Name(), nil)
+	cfg := TestConfig()
+	cfg.EnableScriptChecks = true
+	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
 
 	health := &structs.HealthCheck{
@@ -702,7 +723,9 @@ func TestAgent_AddCheck_StartPassing(t *testing.T) {
 
 func TestAgent_AddCheck_MinInterval(t *testing.T) {
 	t.Parallel()
-	a := NewTestAgent(t.Name(), nil)
+	cfg := TestConfig()
+	cfg.EnableScriptChecks = true
+	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
 
 	health := &structs.HealthCheck{
@@ -735,7 +758,9 @@ func TestAgent_AddCheck_MinInterval(t *testing.T) {
 
 func TestAgent_AddCheck_MissingService(t *testing.T) {
 	t.Parallel()
-	a := NewTestAgent(t.Name(), nil)
+	cfg := TestConfig()
+	cfg.EnableScriptChecks = true
+	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
 
 	health := &structs.HealthCheck{
@@ -797,9 +822,38 @@ func TestAgent_AddCheck_RestoreState(t *testing.T) {
 	}
 }
 
+func TestAgent_AddCheck_ExecDisable(t *testing.T) {
+	t.Parallel()
+
+	a := NewTestAgent(t.Name(), nil)
+	defer a.Shutdown()
+
+	health := &structs.HealthCheck{
+		Node:    "foo",
+		CheckID: "mem",
+		Name:    "memory util",
+		Status:  api.HealthCritical,
+	}
+	chk := &structs.CheckType{
+		Script:   "exit 0",
+		Interval: 15 * time.Second,
+	}
+	err := a.AddCheck(health, chk, false, "")
+	if err == nil || !strings.Contains(err.Error(), "Scripts are disabled on this agent") {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Ensure we don't have a check mapping
+	if memChk := a.state.Checks()["mem"]; memChk != nil {
+		t.Fatalf("should be missing mem check")
+	}
+}
+
 func TestAgent_RemoveCheck(t *testing.T) {
 	t.Parallel()
-	a := NewTestAgent(t.Name(), nil)
+	cfg := TestConfig()
+	cfg.EnableScriptChecks = true
+	a := NewTestAgent(t.Name(), cfg)
 	defer a.Shutdown()
 
 	// Remove check that doesn't exist
@@ -1097,6 +1151,7 @@ func TestAgent_PersistCheck(t *testing.T) {
 	cfg := TestConfig()
 	cfg.Server = false
 	cfg.DataDir = testutil.TempDir(t, "agent") // we manage the data dir
+	cfg.EnableScriptChecks = true
 	a := NewTestAgent(t.Name(), cfg)
 	defer os.RemoveAll(cfg.DataDir)
 	defer a.Shutdown()
@@ -1230,6 +1285,7 @@ func TestAgent_PurgeCheckOnDuplicate(t *testing.T) {
 	cfg := TestConfig()
 	cfg.Server = false
 	cfg.DataDir = testutil.TempDir(t, "agent") // we manage the data dir
+	cfg.EnableScriptChecks = true
 	a := NewTestAgent(t.Name(), cfg)
 	defer os.RemoveAll(cfg.DataDir)
 	defer a.Shutdown()

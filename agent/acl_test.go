@@ -1,14 +1,13 @@
 package agent
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	rawacl "github.com/hashicorp/consul/acl"
-	"github.com/hashicorp/consul/agent/consul/structs"
+	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/testutil"
 	"github.com/hashicorp/consul/types"
 	"github.com/hashicorp/serf/serf"
@@ -73,7 +72,7 @@ func TestACL_Disabled(t *testing.T) {
 	m := MockServer{
 		// Fetch a token without ACLs enabled and make sure the manager sees it.
 		getPolicyFn: func(*structs.ACLPolicyRequest, *structs.ACLPolicy) error {
-			return errors.New(aclDisabled)
+			return rawacl.ErrDisabled
 		},
 	}
 	if err := a.registerEndpoint("ACL", &m); err != nil {
@@ -93,7 +92,7 @@ func TestACL_Disabled(t *testing.T) {
 	// Now turn on ACLs and check right away, it should still think ACLs are
 	// disabled since we don't check again right away.
 	m.getPolicyFn = func(*structs.ACLPolicyRequest, *structs.ACLPolicy) error {
-		return errors.New(aclNotFound)
+		return rawacl.ErrNotFound
 	}
 	if token, err := a.resolveToken("nope"); token != nil || err != nil {
 		t.Fatalf("bad: %v err: %v", token, err)
@@ -107,7 +106,7 @@ func TestACL_Disabled(t *testing.T) {
 	time.Sleep(2 * cfg.ACLDisabledTTL)
 	for i := 0; i < 10; i++ {
 		_, err := a.resolveToken("nope")
-		if err == nil || !strings.Contains(err.Error(), aclNotFound) {
+		if !rawacl.IsErrNotFound(err) {
 			t.Fatalf("err: %v", err)
 		}
 		if a.acls.isDisabled() {
@@ -130,14 +129,14 @@ func TestACL_Special_IDs(t *testing.T) {
 			if req.ACL != "anonymous" {
 				t.Fatalf("bad: %#v", *req)
 			}
-			return errors.New(aclNotFound)
+			return rawacl.ErrNotFound
 		},
 	}
 	if err := a.registerEndpoint("ACL", &m); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	_, err := a.resolveToken("")
-	if err == nil || !strings.Contains(err.Error(), aclNotFound) {
+	if !rawacl.IsErrNotFound(err) {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -147,7 +146,7 @@ func TestACL_Special_IDs(t *testing.T) {
 		return nil
 	}
 	_, err = a.resolveToken("deny")
-	if err == nil || !strings.Contains(err.Error(), rootDenied) {
+	if !rawacl.IsErrRootDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -165,6 +164,12 @@ func TestACL_Special_IDs(t *testing.T) {
 	}
 	if !acl.AgentWrite(cfg.NodeName) {
 		t.Fatalf("should be able to write agent")
+	}
+	if !acl.NodeRead("hello") {
+		t.Fatalf("should be able to read any node")
+	}
+	if acl.NodeWrite("hello") {
+		t.Fatalf("should not be able to write any node")
 	}
 }
 
@@ -340,20 +345,20 @@ func TestACL_Cache(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	acl, err := a.resolveToken("yep")
+	rule, err := a.resolveToken("yep")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if acl == nil {
+	if rule == nil {
 		t.Fatalf("should not be nil")
 	}
-	if !acl.AgentRead(cfg.NodeName) {
+	if !rule.AgentRead(cfg.NodeName) {
 		t.Fatalf("should allow")
 	}
-	if acl.AgentWrite(cfg.NodeName) {
+	if rule.AgentWrite(cfg.NodeName) {
 		t.Fatalf("should deny")
 	}
-	if acl.NodeRead("nope") {
+	if rule.NodeRead("nope") {
 		t.Fatalf("should deny")
 	}
 
@@ -362,20 +367,20 @@ func TestACL_Cache(t *testing.T) {
 		t.Fatalf("should not have called to server")
 		return nil
 	}
-	acl, err = a.resolveToken("yep")
+	rule, err = a.resolveToken("yep")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if acl == nil {
+	if rule == nil {
 		t.Fatalf("should not be nil")
 	}
-	if !acl.AgentRead(cfg.NodeName) {
+	if !rule.AgentRead(cfg.NodeName) {
 		t.Fatalf("should allow")
 	}
-	if acl.AgentWrite(cfg.NodeName) {
+	if rule.AgentWrite(cfg.NodeName) {
 		t.Fatalf("should deny")
 	}
-	if acl.NodeRead("nope") {
+	if rule.NodeRead("nope") {
 		t.Fatalf("should deny")
 	}
 
@@ -383,10 +388,10 @@ func TestACL_Cache(t *testing.T) {
 	// gone.
 	time.Sleep(20 * time.Millisecond)
 	m.getPolicyFn = func(req *structs.ACLPolicyRequest, reply *structs.ACLPolicy) error {
-		return errors.New(aclNotFound)
+		return rawacl.ErrNotFound
 	}
 	_, err = a.resolveToken("yep")
-	if err == nil || !strings.Contains(err.Error(), aclNotFound) {
+	if !rawacl.IsErrNotFound(err) {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -407,20 +412,20 @@ func TestACL_Cache(t *testing.T) {
 		}
 		return nil
 	}
-	acl, err = a.resolveToken("yep")
+	rule, err = a.resolveToken("yep")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if acl == nil {
+	if rule == nil {
 		t.Fatalf("should not be nil")
 	}
-	if !acl.AgentRead(cfg.NodeName) {
+	if !rule.AgentRead(cfg.NodeName) {
 		t.Fatalf("should allow")
 	}
-	if !acl.AgentWrite(cfg.NodeName) {
+	if !rule.AgentWrite(cfg.NodeName) {
 		t.Fatalf("should allow")
 	}
-	if acl.NodeRead("nope") {
+	if rule.NodeRead("nope") {
 		t.Fatalf("should deny")
 	}
 
@@ -437,20 +442,20 @@ func TestACL_Cache(t *testing.T) {
 		didRefresh = true
 		return nil
 	}
-	acl, err = a.resolveToken("yep")
+	rule, err = a.resolveToken("yep")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if acl == nil {
+	if rule == nil {
 		t.Fatalf("should not be nil")
 	}
-	if !acl.AgentRead(cfg.NodeName) {
+	if !rule.AgentRead(cfg.NodeName) {
 		t.Fatalf("should allow")
 	}
-	if !acl.AgentWrite(cfg.NodeName) {
+	if !rule.AgentWrite(cfg.NodeName) {
 		t.Fatalf("should allow")
 	}
-	if acl.NodeRead("nope") {
+	if rule.NodeRead("nope") {
 		t.Fatalf("should deny")
 	}
 	if !didRefresh {
@@ -519,7 +524,7 @@ func TestACL_vetServiceRegister(t *testing.T) {
 		ID:      "my-service",
 		Service: "service",
 	})
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -533,7 +538,7 @@ func TestACL_vetServiceRegister(t *testing.T) {
 		ID:      "my-service",
 		Service: "service",
 	})
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 }
@@ -569,7 +574,7 @@ func TestACL_vetServiceUpdate(t *testing.T) {
 
 	// Update without write privs.
 	err = a.vetServiceUpdate("service-ro", "my-service")
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 }
@@ -603,7 +608,7 @@ func TestACL_vetCheckRegister(t *testing.T) {
 		ServiceID:   "my-service",
 		ServiceName: "service",
 	})
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -619,7 +624,7 @@ func TestACL_vetCheckRegister(t *testing.T) {
 	err = a.vetCheckRegister("node-ro", &structs.HealthCheck{
 		CheckID: types.CheckID("my-check"),
 	})
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -639,7 +644,7 @@ func TestACL_vetCheckRegister(t *testing.T) {
 		ServiceID:   "my-service",
 		ServiceName: "service",
 	})
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -652,7 +657,7 @@ func TestACL_vetCheckRegister(t *testing.T) {
 		ServiceID:   "my-service",
 		ServiceName: "service",
 	})
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 }
@@ -693,7 +698,7 @@ func TestACL_vetCheckUpdate(t *testing.T) {
 
 	// Update service check without write privs.
 	err = a.vetCheckUpdate("service-ro", "my-service-check")
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -708,7 +713,7 @@ func TestACL_vetCheckUpdate(t *testing.T) {
 
 	// Update without write privs.
 	err = a.vetCheckUpdate("node-ro", "my-node-check")
-	if !isPermissionDenied(err) {
+	if !rawacl.IsErrPermissionDenied(err) {
 		t.Fatalf("err: %v", err)
 	}
 }
