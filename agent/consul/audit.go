@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -131,12 +132,29 @@ func (s *Server) LogKVChange(args *structs.KVSRequest) error {
 	return nil
 }
 
+// createConnectionString returns a connection string based on the configuration
+func createConnectionString(c *structs.DBConfig) string {
+	query := url.Values{}
+	query.Add("connection timeout", fmt.Sprintf("%d", 30))
+	query.Add("database", c.Database)
+
+	u := &url.URL{
+		Scheme:   "sqlserver",
+		User:     url.UserPassword(c.Username, c.Password),
+		Host:     fmt.Sprintf("%s:%d", c.Host, c.Port),
+		Path:     c.Server,
+		RawQuery: query.Encode(),
+	}
+	return u.String()
+}
+
 // OpenAuditor initiates a db connection
 func (s *Server) OpenAuditor(c *structs.DBConfig) error {
-	connString := fmt.Sprintf("server=%s\\%s;user id=%s;password=%s;port=%d;database=%s", c.Host, c.Server, c.Username, c.Password, c.Port, c.Database)
-	fmt.Printf("The connection string %s", connString)
+
+	connString := createConnectionString(c)
+	s.logger.Printf("[DEBUG] consul: connection string to MSSQL DB: %s", connString)
 	var err error
-	db, _ = sql.Open("mssql", connString)
+	db, err = sql.Open("mssql", connString)
 	if err != nil {
 		return err
 	}
