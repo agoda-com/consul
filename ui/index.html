@@ -323,7 +323,7 @@
                   {{ input value=model.RegEx class="form-control" required=true placeholder=".*"}}
                 </div>
                 <span class="help-block">Check value against RegEx (<a href="https://github.com/google/re2/wiki/Syntax">golang</a> Syntax)</span>
-                <button {{action "updateKey"}} {{bind-attr disabled=isLoading}} {{bind-attr class=":btn isLoading:btn-warning:btn-success"}} {{bind-attr disabled=isLocked}}>Update</button>
+                <button {{action "updateKey"}} {{bind-attr disabled=isLoading}} {{bind-attr class=":btn isLoading:btn-warning:btn isWarning:btn-warning:btn-success"}} {{bind-attr disabled=isLocked}}>Update</button>
                 <button {{action "cancelEdit"}} {{bind-attr disabled=isLoading}} {{bind-attr class=":btn isLoading:btn-warning:btn-default"}}>Cancel</button>
                 <label class="form-checkbox">{{ input type=checkbox checked=model.validateJson }}Validate JSON</label>
                 <button {{action "deleteKey"}} {{bind-attr disabled=isLoading}} {{bind-attr class=":btn :pull-right isLoading:btn-warning:btn-danger"}} {{bind-attr disabled=isLocked}}>Delete key</button>

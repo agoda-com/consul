@@ -198,10 +198,16 @@ App.KvEditController = KvBaseController.extend({
           data: value
       }).then(function(response) {
         // If success, just reset the loading state.
+        controller.set('errorMessage', '');
         controller.set('isLoading', false);
       }).fail(function(response) {
         // Render the error message on the form if the request failed
         controller.set('errorMessage', 'Received error while processing: ' + response.statusText);
+        if (response.statusText == "Not Acceptable") {
+          controller.set('errorMessage', 'Validation error: Value does not match the pattern');
+          controller.set('isLoading', false);
+          notify('Validation error: Value does not match the pattern', 4000);
+        }
       });
     },
 
