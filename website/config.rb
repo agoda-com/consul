@@ -2,7 +2,7 @@ set :base_url, "https://www.consul.io/"
 
 activate :hashicorp do |h|
   h.name        = "consul"
-  h.version     = "0.9.3-AGODA"
+  h.version     = "0.9.3-AGODA-1"
   h.github_slug = "hashicorp/consul"
 end
 
