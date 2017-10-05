@@ -144,6 +144,16 @@ App.KvShowController = KvBaseController.extend(Ember.Validations.Mixin, {
       }).fail(function(response) {
         // Render the error message on the form if the request failed
         controller.set('errorMessage', 'Received error while processing: ' + response.statusText);
+        if (response.statusText == "Not Acceptable") {
+          controller.set('errorMessage', 'Validation error: Value does not match the pattern');
+          controller.set('isLoading', false);
+          notify('Validation error: Value does not match the pattern', 4000);
+        }
+        if (response.statusText == "Conflict") {
+          controller.set('errorMessage', 'Validation error: Regular expression invalid');
+          controller.set('isLoading', false);
+          notify('Validation error: Regular expression invalid', 4000);
+        }
       });
     },
 
@@ -207,6 +217,11 @@ App.KvEditController = KvBaseController.extend({
           controller.set('errorMessage', 'Validation error: Value does not match the pattern');
           controller.set('isLoading', false);
           notify('Validation error: Value does not match the pattern', 4000);
+        }
+        if (response.statusText == "Conflict") {
+          controller.set('errorMessage', 'Validation error: Regular expression invalid');
+          controller.set('isLoading', false);
+          notify('Validation error: Regular expression invalid', 4000);
         }
       });
     },

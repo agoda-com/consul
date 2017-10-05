@@ -13,6 +13,7 @@ const (
 	errSegmentsNotSupported       = "Network segments are not supported in this version of Consul"
 	errRPCRateExceeded            = "RPC rate limit exceeded"
 	errPatternValidation          = "match pattern"
+	errPatternError               = "parsing regexp"
 )
 
 var (
@@ -23,6 +24,7 @@ var (
 	ErrSegmentsNotSupported       = errors.New(errSegmentsNotSupported)
 	ErrRPCRateExceeded            = errors.New(errRPCRateExceeded)
 	ErrPatternValidation          = errors.New(errPatternValidation)
+	ErrPatternError               = errors.New(errPatternError)
 )
 
 func IsErrRPCRateExceeded(err error) bool {
@@ -31,4 +33,8 @@ func IsErrRPCRateExceeded(err error) bool {
 
 func IsErrPatternValidation(err error) bool {
 	return strings.Contains(err.Error(), errPatternValidation)
+}
+
+func IsErrPatternError(err error) bool {
+	return strings.Contains(err.Error(), errPatternError)
 }
