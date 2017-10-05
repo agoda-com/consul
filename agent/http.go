@@ -239,6 +239,9 @@ func (s *HTTPServer) wrap(handler func(resp http.ResponseWriter, req *http.Reque
 			case structs.IsErrRPCRateExceeded(err):
 				resp.WriteHeader(http.StatusTooManyRequests)
 				fmt.Fprint(resp, err.Error())
+			case structs.IsErrPatternError(err):
+				resp.WriteHeader(http.StatusConflict)
+				fmt.Fprint(resp, err.Error())
 			case structs.IsErrPatternValidation(err):
 				resp.WriteHeader(http.StatusNotAcceptable)
 				fmt.Fprint(resp, err.Error())

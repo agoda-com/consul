@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/armon/go-metrics"
@@ -31,6 +32,10 @@ func kvsPreApply(srv *Server, rule acl.ACL, op api.KVOp, dirEnt *structs.DirEntr
 	if dirEnt.RegEx != "" {
 		matched, err := regexp.Match(dirEnt.RegEx, dirEnt.Value)
 		if err != nil {
+			if strings.Contains("error parsing regexp", err.Error()) {
+				var validationFail = errors.New(err.Error())
+				return false, validationFail
+			}
 			return false, fmt.Errorf("Failed to validate value: %v", err)
 		}
 		if !matched {
