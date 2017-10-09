@@ -123,22 +123,22 @@ App.KvShowController = KvBaseController.extend(Ember.Validations.Mixin, {
       // on our parent, or we're not at the root level,
       // add the prefix
       if (parentKey !== undefined && parentKey !== "/") {
-        newKey.set('Key', (parentKey + newKey.get('Key')));
+        newKey.set('Key', (newKey.get('Key')));
       }
       var obj = { "value":newKey.get('Value'), "regex":regEx };
       var value = JSON.stringify(obj);
 
       // Put the Key and the Value retrieved from the form
       Ember.$.ajax({
-          url: (formatUrl(consulHost + "/v1/kv/" + newKey.get('Key'), dc, token)),
+          url: (formatUrl(consulHost + "/v1/kv/" + parentKey + newKey.get('Key'), dc, token)),
           type: 'PUT',
           data: value
       }).then(function(response) {
         // transition to the right place
         if (newKey.get('isFolder') === true) {
-          controller.transitionToRoute('kv.show', newKey.get('Key'));
+          controller.transitionToRoute('kv.show', parentKey + newKey.get('Key'));
         } else {
-          controller.transitionToRoute('kv.edit', newKey.get('Key'));
+          controller.transitionToRoute('kv.edit', parentKey + newKey.get('Key'));
         }
         controller.set('isLoading', false);
       }).fail(function(response) {
