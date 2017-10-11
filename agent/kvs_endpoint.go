@@ -68,7 +68,20 @@ func (s *HTTPServer) KVSGet(resp http.ResponseWriter, req *http.Request, args *s
 	// Make the RPC
 	var out structs.IndexedDirEntries
 	if err := s.agent.RPC(method, &args, &out); err != nil {
-		return nil, err
+		if (method == "KVS.Get") && (err.Error() == "No known Consul servers") {
+			// We dont know any consul server, but we can try to get the KV from the auditor
+			fmt.Printf("Try to get Value for Key [%s] from DB for DC [%s]", args.Key, args.Datacenter)
+			// Gater value
+
+			// Create dir entry
+			entry := structs.DirEntry{}
+			out.Entries = append(out.Entries, &entry)
+			out.Entries[0].Value = []byte("Baba Bobo")
+			out.Entries[0].Key = args.Key
+			out.Entries[0].RegEx = ".*.*"
+		} else {
+			return nil, err
+		}
 	}
 	setMeta(resp, &out.QueryMeta)
 
