@@ -70,17 +70,26 @@ func (s *HTTPServer) KVSGet(resp http.ResponseWriter, req *http.Request, args *s
 	if err := s.agent.RPC(method, &args, &out); err != nil {
 		if (method == "KVS.Get") && (err.Error() == "No known Consul servers") {
 			// We dont know any consul server, but we can try to get the KV from the auditor
-			fmt.Printf("Try to get Value for Key [%s] from DB for DC [%s]", args.Key, args.Datacenter)
-			// Gater value
+			s.agent.logger.Printf("[INFO] Try to get Value for Key [%s] from DB for DC [%s]", args.Key, args.Datacenter)
 
-			// Create dir entry
-			entry := structs.DirEntry{}
-			out.Entries = append(out.Entries, &entry)
-			out.Entries[0].Value = []byte("Baba Bobo")
-			out.Entries[0].Key = args.Key
-			out.Entries[0].RegEx = ".*.*"
+			if s.IsAuditorOpen() == false {
+				s.OpenAuditor()
+			}
+			// Gather value and create dir entry
+			entry, err := s.GetKV(args.Key, args.Datacenter)
+			if err != nil {
+				return nil, err
+			}
+			if entry.Key != "" {
+				out.Entries = append(out.Entries, &entry)
+			}
 		} else {
 			return nil, err
+		}
+	} else {
+		// Close connection to db if consul server are available again
+		if s.IsAuditorOpen() {
+			s.CloseAuditor()
 		}
 	}
 	setMeta(resp, &out.QueryMeta)
