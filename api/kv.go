@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -199,15 +198,7 @@ func (k *KV) Put(p *KVPair, q *WriteOptions) (*WriteMeta, error) {
 		params["flags"] = strconv.FormatUint(p.Flags, 10)
 	}
 
-	// Combine the value with its RegEx
-	var kvbundle KVBundle
-	kvbundle.Value = p.Value
-	kvbundle.RegEx = p.RegEx
-
-	var val bytes.Buffer
-	binary.Write(&val, binary.BigEndian, kvbundle)
-
-	_, wm, err := k.put(p.Key, params, val.Bytes(), q)
+	_, wm, err := k.put(p.Key, params, p.Value, q)
 	return wm, err
 }
 
@@ -257,6 +248,7 @@ func (k *KV) put(key string, params map[string]string, body []byte, q *WriteOpti
 	for param, val := range params {
 		r.params.Set(param, val)
 	}
+
 	r.body = bytes.NewReader(body)
 	rtt, resp, err := requireOK(k.c.doRequest(r))
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -219,7 +220,13 @@ func (s *HTTPServer) KVSPut(resp http.ResponseWriter, req *http.Request, args *s
 	}
 
 	var dat structs.ValValid
-	if err := json.Unmarshal(buf.Bytes(), &dat); err != nil {
+	messagePattern := "^{\"value\":\".*\",\"regex\":\".*\"}$"
+	matched, err := regexp.MatchString(messagePattern, buf.String())
+	if err != nil {
+		return nil, err
+	}
+
+	if !matched || json.Unmarshal(buf.Bytes(), &dat) != nil {
 		// This seems to be an old value without not in JSON with the
 		// corresponding RegEx. Lets parse it as value.
 		dat.Value = buf.String()
@@ -228,6 +235,7 @@ func (s *HTTPServer) KVSPut(resp http.ResponseWriter, req *http.Request, args *s
 
 	applyReq.DirEnt.Value = []byte(dat.Value)
 	applyReq.DirEnt.RegEx = dat.RegEx
+
 	// Make the RPC
 	var out bool
 	if err := s.agent.RPC("KVS.Apply", &applyReq, &out); err != nil {
