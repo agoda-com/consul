@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -68,7 +69,29 @@ func (s *HTTPServer) KVSGet(resp http.ResponseWriter, req *http.Request, args *s
 	// Make the RPC
 	var out structs.IndexedDirEntries
 	if err := s.agent.RPC(method, &args, &out); err != nil {
-		return nil, err
+		if (method == "KVS.Get") && (err.Error() == "No known Consul servers") {
+			// We dont know any consul server, but we can try to get the KV from the auditor
+			s.agent.logger.Printf("[INFO] Try to get Value for Key [%s] from DB for DC [%s]", args.Key, args.Datacenter)
+
+			if s.IsAuditorOpen() == false {
+				s.OpenAuditor()
+			}
+			// Gather value and create dir entry
+			entry, err := s.GetKV(args.Key, args.Datacenter)
+			if err != nil {
+				return nil, err
+			}
+			if entry.Key != "" {
+				out.Entries = append(out.Entries, &entry)
+			}
+		} else {
+			return nil, err
+		}
+	} else {
+		// Close connection to db if consul server are available again
+		if s.IsAuditorOpen() {
+			s.CloseAuditor()
+		}
 	}
 	setMeta(resp, &out.QueryMeta)
 
@@ -197,7 +220,13 @@ func (s *HTTPServer) KVSPut(resp http.ResponseWriter, req *http.Request, args *s
 	}
 
 	var dat structs.ValValid
-	if err := json.Unmarshal(buf.Bytes(), &dat); err != nil {
+	messagePattern := "^{\"value\":\".*\",\"regex\":\".*\"}$"
+	matched, err := regexp.MatchString(messagePattern, buf.String())
+	if err != nil {
+		return nil, err
+	}
+
+	if !matched || json.Unmarshal(buf.Bytes(), &dat) != nil {
 		// This seems to be an old value without not in JSON with the
 		// corresponding RegEx. Lets parse it as value.
 		dat.Value = buf.String()
@@ -206,6 +235,7 @@ func (s *HTTPServer) KVSPut(resp http.ResponseWriter, req *http.Request, args *s
 
 	applyReq.DirEnt.Value = []byte(dat.Value)
 	applyReq.DirEnt.RegEx = dat.RegEx
+
 	// Make the RPC
 	var out bool
 	if err := s.agent.RPC("KVS.Apply", &applyReq, &out); err != nil {
